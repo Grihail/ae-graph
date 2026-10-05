@@ -1,0 +1,15 @@
+[
+  {
+    "modid": "aegraph",
+    "name": "AE2 Graph Crafting",
+    "description": "Replaces the AE2 autocrafting calculator with a graph-based optimizer: all encoded patterns form a recipe graph, byproducts are recycled and branching/looping processing chains (e.g. HBM bedrock ore) are planned for maximum yield.",
+    "version": "${version}",
+    "mcversion": "${mcversion}",
+    "authorList": ["Grihail"],
+    "credits": "Built on Applied Energistics 2 by AlgorithmX2 and the GT New Horizons AE2 fork. Licensed under LGPLv3.",
+    "url": "",
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": ["appliedenergistics2"]
+  }
+]

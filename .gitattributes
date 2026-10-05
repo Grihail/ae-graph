@@ -1,0 +1,16 @@
+# Normalize text files to LF in the repository
+* text=auto
+
+# Shell scripts must keep LF, or the build breaks on Linux/macOS (CI)
+gradlew text eol=lf
+*.sh text eol=lf
+
+# Windows scripts keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.png binary
+*.jar binary
+*.ogg binary
+*.nbt binary

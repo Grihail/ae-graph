@@ -1,0 +1,72 @@
+plugins {
+    id 'java'
+    id 'com.gtnewhorizons.retrofuturagradle' version '2.0.2'
+}
+
+group = 'com.grihail.aegraph'
+version = '1.0.0'
+
+base {
+    archivesName = 'AEGraphCrafting-1.7.10'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(8)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+repositories {
+    maven {
+        name = 'GTNH Maven'
+        url = 'https://nexus.gtnewhorizons.com/repository/public/'
+    }
+    exclusiveContent {
+        forRepository { mavenCentral() }
+        filter {
+            includeModule 'org.scala-lang', 'scala-library'
+            includeModule 'org.scala-lang', 'scala-compiler'
+            includeModule 'org.scala-lang', 'scala-reflect'
+        }
+    }
+    mavenCentral()
+}
+
+minecraft {
+    mcVersion = '1.7.10'
+    username = 'Developer'
+    extraRunJvmArguments.add('-Dfml.coreMods.load=com.grihail.aegraph.asm.AEGraphCorePlugin')
+}
+
+dependencies {
+    // Та же сборка AE2, что стоит в модпаке (deobf-версия для компиляции).
+    compileOnly('com.github.GTNewHorizons:Applied-Energistics-2-Unofficial:rv3-beta-690-GTNH:dev') {
+        transitive = false
+    }
+
+    testImplementation 'junit:junit:4.13.2'
+}
+
+jar {
+    from(files('COPYING', 'COPYING.LESSER')) {
+        into 'META-INF'
+        rename { "${it}.aegraph" }
+    }
+    manifest {
+        attributes(
+            'FMLCorePlugin': 'com.grihail.aegraph.asm.AEGraphCorePlugin',
+            'FMLCorePluginContainsFMLMod': 'true'
+        )
+    }
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('mcmod.info') {
+        expand 'version': project.version, 'mcversion': '1.7.10'
+    }
+}
