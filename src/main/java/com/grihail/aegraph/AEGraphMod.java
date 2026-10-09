@@ -74,37 +74,42 @@ public class AEGraphMod {
     @Mod.EventHandler
     public void init(FMLInitializationEvent event) {
         proxy.init();
+        FastFeed.registerSupport();
         final IDefinitions ae = AEApi.instance().definitions();
-        final ItemStack unit = ae.blocks().craftingUnit().maybeStack(1).orNull();
         final ItemStack logic = ae.materials().logicProcessor().maybeStack(1).orNull();
         final ItemStack calc = ae.materials().calcProcessor().maybeStack(1).orNull();
         final ItemStack eng = ae.materials().engProcessor().maybeStack(1).orNull();
-        if (unit != null && logic != null && calc != null && eng != null) {
-            GameRegistry.addShapedRecipe(new ItemStack(coprocessor), "CLC", "EUE", "CLC", 'C', calc, 'L', logic,
-                    'E', eng, 'U', unit);
-        } else {
-            LOG.warn("AE2 processors or crafting unit are disabled, no recipe for the Graph Co-Processor");
-        }
+        final ItemStack pearl = ae.materials().fluixPearl().maybeStack(1).orNull();
 
-        FastFeed.registerSupport();
-        final ItemStack advCard = ae.materials().advCard().maybeStack(1).orNull();
-        final ItemStack speedCard = ae.materials().cardSpeed().maybeStack(1).orNull();
-        if (advCard != null && eng != null) {
-            GameRegistry.addShapelessRecipe(new ItemStack(fastFeedCard), advCard, eng,
-                    speedCard != null ? speedCard : new ItemStack(net.minecraft.init.Items.redstone));
-        } else {
-            LOG.warn("AE2 advanced card or engineering processor is disabled, no recipe for the Fast Feed Card");
-        }
+        // Graph Co-Processor: it also accelerates its CPU like a 64x Crafting Co-Processing Unit
+        // (coprocessorAcceleration), so it is built around one.
+        addShaped("Graph Co-Processor", new ItemStack(coprocessor), new String[] { "ECE", "LXL", "ECE" }, 'E', eng,
+                'C', calc, 'L', logic, 'X', ae.blocks().craftingAccelerator64x().maybeStack(1).orNull());
 
-        // Remote Crafting Bus: storage bus + pattern provider parts of AE2 + engineering processor.
-        final ItemStack storageBus = ae.parts().storageBus().maybeStack(1).orNull();
-        final ItemStack ifacePart = ae.parts().iface().maybeStack(1).orNull();
-        if (storageBus != null && ifacePart != null && eng != null) {
-            GameRegistry.addShapelessRecipe(new ItemStack(remoteBus), storageBus, ifacePart, eng);
-        } else {
-            LOG.warn("AE2 storage bus, interface part or engineering processor is disabled, no recipe for the Remote "
-                    + "Crafting Bus");
+        // Fast Feed Card: removes the interface's multi-second stall between patterns, so it is above the
+        // Super Speed Card.
+        addShaped("Fast Feed Card", new ItemStack(fastFeedCard), new String[] { "EPE", "ASA", "EPE" }, 'E', eng,
+                'P', pearl, 'A', ae.materials().advCard().maybeStack(1).orNull(), 'S',
+                ae.materials().cardSuperSpeed().maybeStack(1).orNull());
+
+        // Remote Crafting Bus: a link to the whole crafting setup of another network.
+        addShaped("Remote Crafting Bus", new ItemStack(remoteBus), new String[] { "EPE", "SIS", "EPE" }, 'E', eng,
+                'P', pearl, 'S', ae.parts().storageBus().maybeStack(1).orNull(), 'I',
+                ae.parts().iface().maybeStack(1).orNull());
+    }
+
+    /** Shaped recipe {@code rows} with ({@code char}, {@code ItemStack}) pairs; none if an AE2 item is disabled. */
+    private static void addShaped(String name, ItemStack result, String[] rows, Object... keys) {
+        for (int k = 1; k < keys.length; k += 2) {
+            if (keys[k] == null) {
+                LOG.warn("An AE2 ingredient ('{}') is disabled, no recipe for the {}", keys[k - 1], name);
+                return;
+            }
         }
+        final Object[] recipe = new Object[rows.length + keys.length];
+        System.arraycopy(rows, 0, recipe, 0, rows.length);
+        System.arraycopy(keys, 0, recipe, rows.length, keys.length);
+        GameRegistry.addShapedRecipe(result, recipe);
     }
 
     @Mod.EventHandler

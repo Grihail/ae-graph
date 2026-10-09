@@ -24,17 +24,22 @@ Also works as a Crafting Co-Processing Unit (+64 by default, `coprocessorAcceler
 Right-click opens the graph of the current or last plan: raw materials on the left, target on the right, purple nodes are patterns, orange arcs are loops. Shift + right-click with an empty hand opens the normal CPU status.
 
 ```text
-C L C    C - Calculation Processor
-E U E    L - Logic Processor
-C L C    E - Engineering Processor
-         U - Crafting Unit
+E C E    E - Engineering Processor
+L X L    C - Calculation Processor
+E C E    L - Logic Processor
+         X - 64x Crafting Co-Processing Unit
 ```
 
 ### Fast Feed Card
 
 Upgrade for the ME Interface (block or part). Normally, when a machine doesn't accept the whole pattern, the interface stalls for a few seconds before taking the next one. With the card the CPU pushes patterns into the machine back to back.
 
-Shapeless: Advanced Card + Engineering Processor + Acceleration Card.
+```text
+E P E    E - Engineering Processor
+A S A    P - Fluix Pearl
+E P E    A - Advanced Card
+         S - Super Speed Card
+```
 
 ### Remote Crafting Bus
 
@@ -45,7 +50,12 @@ The **Priority** button in the bus GUI:
 - **ON**: these items are crafted only through the bus. Network A's own patterns for them are ignored.
 - **OFF**: network A uses its own patterns first, network B covers the rest.
 
-Shapeless: Storage Bus + ME Interface (part) + Engineering Processor.
+```text
+E P E    E - Engineering Processor
+S I S    P - Fluix Pearl
+E P E    S - Storage Bus
+         I - ME Interface (part)
+```
 
 ## Other changes
 

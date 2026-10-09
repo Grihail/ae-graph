@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Recipes are much more expensive, in line with what the items do:
+  - Graph Co-Processor: built around a 64x Crafting Co-Processing Unit (it accelerates its CPU by +64 by default), plus 4 Engineering, 2 Calculation and 2 Logic Processors.
+  - Fast Feed Card: Super Speed Card + 2 Advanced Cards + 4 Engineering Processors + 2 Fluix Pearls.
+  - Remote Crafting Bus: 2 Storage Buses + ME Interface + 4 Engineering Processors + 2 Fluix Pearls.
+
 ## [1.0.0]
 
 First public release. Requires Applied Energistics 2 rv3-beta-690-GTNH on Minecraft 1.7.10.
