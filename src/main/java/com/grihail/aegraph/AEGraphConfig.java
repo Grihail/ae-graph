@@ -20,6 +20,7 @@ public final class AEGraphConfig {
     public static boolean returnUnneededItems = true;
     public static int stallSeconds = 60;
     public static boolean substitutes = true;
+    public static boolean coalescePatternRebuilds = true;
 
     public static double defaultItemCost = 1.0;
     public static double fluidCostPerMb = 0.001;
@@ -77,6 +78,10 @@ public final class AEGraphConfig {
                         + "storage. If storage has nothing and the requested items are already delivered, the job is "
                         + "finished and the CPU freed. Also frees CPUs that wait for items that never came after the job "
                         + "is done. 0 disables.");
+        coalescePatternRebuilds = config.getBoolean("coalescePatternRebuilds", GENERAL, true,
+                "AE2 rebuilds a network's whole pattern list every time an ME Interface loads or changes. With many "
+                        + "interfaces (world load, big builds) that is one full rebuild per interface. true: requests "
+                        + "within one tick are merged into a single rebuild at the network's next tick.");
         substitutes = config.getBoolean("substitutes", SOLVER, true,
                 "Patterns with 'substitute' enabled may use equivalent items (ore dictionary, other damage values), "
                         + "like AE2 does. Off: the graph uses only the exact items written in the pattern.");

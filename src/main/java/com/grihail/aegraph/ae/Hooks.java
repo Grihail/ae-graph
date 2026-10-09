@@ -88,6 +88,53 @@ public final class Hooks {
         }
     }
 
+    // --- coalesced pattern list rebuilds -----------------------------------------------------------------
+
+    private static final java.util.Set<CraftingGridCache> DEFERRED_REBUILDS = java.util.Collections
+            .newSetFromMap(new java.util.WeakHashMap<CraftingGridCache, Boolean>());
+    /** Set right before the deferred rebuild runs: that one call must go through. */
+    private static boolean flushingRebuild;
+
+    /** Start of {@code CraftingGridCache.updatePatterns}: true skips it, the grid rebuilds once at its next tick. */
+    public static boolean deferPatternRebuild(CraftingGridCache cache) {
+        if (flushingRebuild) {
+            flushingRebuild = false;
+            return false;
+        }
+        if (!AEGraphConfig.coalescePatternRebuilds) return false;
+        DEFERRED_REBUILDS.add(cache);
+        return true;
+    }
+
+    /** Start of {@code CraftingGridCache.onUpdateTick}: true makes it run the deferred rebuild now. */
+    public static boolean takeDeferredRebuild(CraftingGridCache cache) {
+        if (DEFERRED_REBUILDS.isEmpty() || !DEFERRED_REBUILDS.remove(cache)) return false;
+        flushingRebuild = true;
+        return true;
+    }
+
+    private static final java.util.Set<appeng.me.cache.GridStorageCache> DEFERRED_CELLS = java.util.Collections
+            .newSetFromMap(new java.util.WeakHashMap<appeng.me.cache.GridStorageCache, Boolean>());
+    private static boolean flushingCells;
+
+    /** Start of {@code GridStorageCache.cellUpdate}: true skips it, the grid rebuilds its storages at its next tick. */
+    public static boolean deferCellUpdate(appeng.me.cache.GridStorageCache cache) {
+        if (flushingCells) {
+            flushingCells = false;
+            return false;
+        }
+        if (!AEGraphConfig.coalescePatternRebuilds) return false;
+        DEFERRED_CELLS.add(cache);
+        return true;
+    }
+
+    /** Start of {@code GridStorageCache.onUpdateTick}: true makes it run the deferred storage rebuild now. */
+    public static boolean takeDeferredCellUpdate(appeng.me.cache.GridStorageCache cache) {
+        if (DEFERRED_CELLS.isEmpty() || !DEFERRED_CELLS.remove(cache)) return false;
+        flushingCells = true;
+        return true;
+    }
+
     /** End of {@code CraftingGridCache.setPatternsFromCraftingMethods}: exclusive remote buses hide other patterns. */
     public static void afterPatternsBuilt(Map<IAEItemStack, ImmutableList<ICraftingPatternDetails>> craftable) {
         try {
