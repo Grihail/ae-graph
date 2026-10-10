@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.1.1]
+
+### Fixed
+
+- Remote Crafting Bus: when network B lacks items for an order, the bus now takes them from network A's storage and moves them to network B once per order. Before, the order waited forever. If neither network has the items, the bus GUI lists what is missing.
+
 ## [1.1.0]
 
 ### Added

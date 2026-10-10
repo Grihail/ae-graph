@@ -50,7 +50,9 @@ import appeng.api.parts.IPart;
 import appeng.api.parts.IPartCollisionHelper;
 import appeng.api.parts.IPartHost;
 import appeng.api.parts.IPartRenderHelper;
+import appeng.api.storage.IMEMonitor;
 import appeng.api.storage.data.IAEItemStack;
+import appeng.api.storage.data.IItemList;
 import appeng.api.util.AECableType;
 import appeng.client.texture.CableBusTextures;
 import appeng.crafting.CraftingLink;
@@ -128,6 +130,8 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
     private final Map<IAEItemStack, Calculation> calculating = new HashMap<>();
     private final Map<IAEItemStack, Long> retryAt = new HashMap<>();
     private final Map<IAEItemStack, Long> unneededSince = new HashMap<>();
+    /** Items whose current request already got what network B lacked from network A (once per request). */
+    private final java.util.Set<IAEItemStack> supplied = new java.util.HashSet<>();
 
     private List<RemotePattern> exported = Collections.emptyList();
     private int exportedSignature = 0;
@@ -294,6 +298,7 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
         queued.merge(key, pattern.output().getStackSize() * runs, Long::sum);
         unneededSince.remove(key);
         retryAt.remove(key);
+        supplied.remove(key);
         saveChanges();
         wake();
         return true;
@@ -340,7 +345,7 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
         if (own != null) deliver(own);
         final long now = worldTime();
         if (own != null) dropUnneeded(own, now);
-        if (remoteGrid != null) startJobs(remoteGrid, now);
+        if (remoteGrid != null) startJobs(own, remoteGrid, now);
         if (!toDeliver.isEmpty() || !calculating.isEmpty()) return TickRateModulation.URGENT;
         if (!queued.isEmpty()) return TickRateModulation.FASTER;
         return TickRateModulation.SLOWER;
@@ -396,6 +401,7 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
             }
             if (now - since < CANCEL_GRACE_TICKS) continue;
             unneededSince.remove(item);
+            supplied.remove(item);
             final Long dropped = queued.remove(item);
             final Calculation calc = calculating.remove(item);
             if (calc != null) calc.future.cancel(true);
@@ -413,8 +419,11 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
         }
     }
 
-    /** Hands queued amounts to network B: calculate there, then start on a free CPU of network B. */
-    private void startJobs(IGrid remote, long now) {
+    /**
+     * Hands queued amounts to network B: calculate there, then start on a free CPU of network B. What network B
+     * lacks for it comes from network A's storage ({@link #supplyMissing}).
+     */
+    private void startJobs(IGrid own, IGrid remote, long now) {
         if (queued.isEmpty()) return;
         final ICraftingGrid crafting = remote.getCache(ICraftingGrid.class);
         final World world = getHost().getTile().getWorldObj();
@@ -455,7 +464,8 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
                 continue;
             }
             if (job.isSimulation()) {
-                problem("aegraph.remote.problem.missing", calc.amount + " x " + name(item));
+                // Supplied: calculate again on the next tick, now with the items in network B.
+                if (supplyMissing(own, remote, job, item, calc.amount)) continue;
                 retryAt.put(item, now + RETRY_TICKS);
                 continue;
             }
@@ -468,6 +478,7 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
                 continue;
             }
             running.add(new Request(link, item, calc.amount));
+            supplied.remove(item);
             final long rest = queued.getOrDefault(item, 0L) - calc.amount;
             if (rest > 0) queued.put(item, rest);
             else queued.remove(item);
@@ -475,6 +486,88 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
             problemKey = null;
             saveChanges();
         }
+    }
+
+    /**
+     * Network B's calculation came out short: what B lacks is moved from network A's storage into B's - all of it,
+     * or nothing when network A doesn't have it all either (then the problem lists what neither network has). False
+     * when nothing was moved. Once per request: network A hands over the raw materials, network B does the rest.
+     * Items network A's CPUs reserved are in those CPUs, not in storage, so they stay.
+     */
+    private boolean supplyMissing(IGrid own, IGrid remote, ICraftingJob job, IAEItemStack item, long amount) {
+        final String target = amount + " x " + name(item);
+        final IStorageGrid ownStorage = own == null ? null : (IStorageGrid) own.getCache(IStorageGrid.class);
+        final IStorageGrid remoteStorage = remote.getCache(IStorageGrid.class);
+        if (ownStorage == null || remoteStorage == null) {
+            problem("aegraph.remote.problem.missing", target);
+            return false;
+        }
+        final IMEMonitor<IAEItemStack> from = ownStorage.getItemInventory();
+        final IMEMonitor<IAEItemStack> to = remoteStorage.getItemInventory();
+        final List<IAEItemStack> lacking = lacking(job, item, to);
+        // Already moved once for this request and still short (something in network B took the items): network B
+        // has to get them itself, the bus doesn't keep feeding it.
+        if (lacking.isEmpty() || supplied.contains(item)) {
+            problem("aegraph.remote.problem.missing", target);
+            return false;
+        }
+        final List<IAEItemStack> neither = new ArrayList<>();
+        for (final IAEItemStack s : lacking) {
+            final IAEItemStack have = from.extractItems(s.copy(), Actionable.SIMULATE, ownSource);
+            final long rest = s.getStackSize() - (have == null ? 0 : have.getStackSize());
+            if (rest > 0) neither.add(amount(s, rest));
+        }
+        if (!neither.isEmpty()) {
+            problem("aegraph.remote.problem.lacking", list(neither));
+            return false;
+        }
+        for (final IAEItemStack s : lacking) {
+            final IAEItemStack got = from.extractItems(s.copy(), Actionable.MODULATE, ownSource);
+            if (got == null || got.getStackSize() <= 0) continue;
+            final IAEItemStack left = to.injectItems(got, Actionable.MODULATE, remoteSource);
+            // Network B is full: back to network A.
+            if (left != null && left.getStackSize() > 0) {
+                toDeliver.merge(amount(left, 1), left.getStackSize(), Long::sum);
+            }
+        }
+        supplied.add(item);
+        AEGraphMod.LOG.info("Remote crafting bus: moved {} from this network to the other one for {}", list(lacking),
+                target);
+        saveChanges();
+        return true;
+    }
+
+    /** What the (incomplete) plan of a job takes from network B's storage beyond what B has, without the target. */
+    private List<IAEItemStack> lacking(ICraftingJob job, IAEItemStack target, IMEMonitor<IAEItemStack> remoteItems) {
+        final IItemList<IAEItemStack> plan = AEApi.instance().storage().createItemList();
+        job.populatePlan(plan);
+        final List<IAEItemStack> lacking = new ArrayList<>();
+        for (final IAEItemStack s : plan) {
+            if (s.getStackSize() <= 0 || s.isSameType(target)) continue;
+            final IAEItemStack want = amount(s, s.getStackSize());
+            final IAEItemStack have = remoteItems.extractItems(want.copy(), Actionable.SIMULATE, remoteSource);
+            final long rest = want.getStackSize() - (have == null ? 0 : have.getStackSize());
+            if (rest > 0) lacking.add(want.setStackSize(rest));
+        }
+        return lacking;
+    }
+
+    /** A plain stack of the item (no craftable / requestable marks of a plan). */
+    private static IAEItemStack amount(IAEItemStack item, long amount) {
+        final IAEItemStack s = item.copy();
+        s.reset();
+        return s.setStackSize(amount);
+    }
+
+    /** Up to three stacks for messages. */
+    private static String list(List<IAEItemStack> stacks) {
+        final StringBuilder sb = new StringBuilder();
+        for (int k = 0; k < stacks.size() && k < 3; k++) {
+            if (k > 0) sb.append(", ");
+            sb.append(stacks.get(k).getStackSize()).append(" x ").append(name(stacks.get(k)));
+        }
+        if (stacks.size() > 3) sb.append(" (+").append(stacks.size() - 3).append(')');
+        return sb.toString();
     }
 
     /**

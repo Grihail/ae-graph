@@ -59,5 +59,6 @@ aegraph.remote.state.noInterface=Шина не смотрит на МЕ-инте
 aegraph.remote.state.sameGrid=Интерфейс в этой же МЕ сети — нужна другая, независимая сеть
 aegraph.remote.state.remoteOffline=Интерфейс второй сети без питания или канала
 aegraph.remote.problem.missing=Второй сети не хватает ресурсов на %s. Повтор через 5 с.
+aegraph.remote.problem.lacking=Нет ни в одной из сетей: %s. Повтор через 5 с.
 aegraph.remote.problem.noCpu=Во второй сети нет свободного CPU для %s. Повтор через 5 с.
 aegraph.remote.problem.failed=Не удалось рассчитать крафт %s во второй сети. Повтор через 5 с.

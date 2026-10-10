@@ -645,8 +645,9 @@ public final class SelfTest {
                 if (!waited(60)) return;
                 final NBTTagCompound state = bus().describe();
                 log("remote bus: " + state);
-                check("aegraph.remote.problem.missing".equals(state.getString("problem")),
-                        "the bus reports that network B lacks items");
+                check("aegraph.remote.problem.lacking".equals(state.getString("problem"))
+                        && state.getString("problemArg").contains(new ItemStack(Blocks.clay).getDisplayName()),
+                        "the bus reports what neither network has: " + state.getString("problemArg"));
                 check(state.getTagList("queued", 10).tagCount() == 1, "the request waits in the bus");
                 check(anyCpuBusy(), "network A's CPU waits for the bricks");
                 for (final ICraftingCPU cpu : ((ICraftingGrid) grid().getCache(ICraftingGrid.class)).getCpus()) {
@@ -661,7 +662,34 @@ public final class SelfTest {
                 check(state.getTagList("queued", 10).tagCount() == 0 && state.getTagList("running", 10).tagCount() == 0,
                         "cancelled in network A: the bus dropped the request");
                 check(!anyCpuBusy() && !anyCpuBusyB(), "no CPU left busy in either network");
-                next();
+                goTo(80);
+                return;
+            }
+            // 13b. Network B lacks items that network A has: the bus moves them from A's storage into B's.
+            case 80:
+                inject(new ItemStack(Blocks.clay, 1));
+                request(new ItemStack(Items.brick), 4);
+                return;
+            case 81:
+                awaitPlan("4 bricks (the clay is in network A)", false);
+                return;
+            case 82:
+                if (awaitCrafted(new ItemStack(Items.brick), 4, "4 bricks from network A's clay", true)) next();
+                return;
+            case 83: {
+                if (!waited(40)) return;
+                final NBTTagCompound state = bus().describe();
+                log("remote bus: " + state);
+                check(stored(new ItemStack(Items.brick)) == 4 && stored(new ItemStack(Blocks.clay)) == 0,
+                        "network A's clay went to network B and came back as 4 bricks");
+                check(storedB(new ItemStack(Blocks.clay)) == 0 && storedB(new ItemStack(Items.clay_ball)) == 0
+                        && storedB(new ItemStack(Items.brick)) == 0, "network B used exactly what it got");
+                check(!state.hasKey("problem") && state.getTagList("queued", 10).tagCount() == 0
+                        && state.getTagList("running", 10).tagCount() == 0
+                        && state.getTagList("deliver", 10).tagCount() == 0, "the bus has nothing left");
+                check(!anyCpuBusy() && !anyCpuBusyB(), "both CPUs free");
+                extract(new ItemStack(Items.brick), stored(new ItemStack(Items.brick)));
+                goTo(60);
                 return;
             }
             // 14. Reload in the middle of a remote job (slow machine in network B): phase 1 stops the server here,

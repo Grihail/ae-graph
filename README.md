@@ -45,6 +45,8 @@ E P E    A - Advanced Card
 
 Lets one ME network order crafts from another without merging them. Put the bus on network A facing an ME Interface of network B. The crafts of that interface appear in network A's terminals. Network B calculates and runs them on its own CPUs with its own items, then the bus delivers the result to network A.
 
+If network B lacks items for an order, the bus moves exactly the missing items from network A's storage to network B, once per order. Network A never sees network B's patterns, storage or crafting chain. It hands over raw materials and gets the result back.
+
 The **Priority** button in the bus GUI:
 
 - **ON**: these items are crafted only through the bus. Network A's own patterns for them are ignored.
