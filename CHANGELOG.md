@@ -7,10 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [1.1.2]
 
-### Fixed
+### Changed
 
-- Remote Crafting Bus: orders for network B are handled one at a time and only when it has a free CPU: calculated, supplied from network A and started right away. Several remote ingredients of one craft no longer count on the same items in network B and no longer get stuck after network B's CPU was busy.
-- Remote Crafting Bus: when an item reaches network A past the bus (network B's machines return their products into network A), the bus orders less, warns in its GUI and cancels network B's job once network A no longer needs it, so network B's CPU doesn't wait forever.
+- Remote Crafting Bus works like an ME Interface whose machines stand in network B. Network A sees the patterns of the faced interface with their inputs, crafts or gathers the inputs in its own plan on the same CPU and pushes each run through the bus into network B's interface and machine. The products come back from network B's storage, or straight from the machine into network A. Network B no longer calculates or runs jobs for network A and needs no CPU. This replaces the opaque "nothing -> item" step of 1.1.0-1.1.1, which could stall when network B lacked items. Cancel jobs that use the bus before updating.
 
 ## [1.1.1]
 

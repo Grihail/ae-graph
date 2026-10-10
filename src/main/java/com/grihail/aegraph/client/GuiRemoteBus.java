@@ -118,6 +118,11 @@ public class GuiRemoteBus extends GuiScreen {
             if (mouseX >= ix && mouseX < ix + 16 && mouseY >= iy && mouseY < iy + 16) {
                 tooltip.add(stack.getDisplayName());
                 tooltip.add(StatCollector.translateToLocalFormatted("aegraph.remote.gui.perRun", e.getLong("amount")));
+                final NBTTagList in = e.getTagList("in", 10);
+                for (int q = 0; q < in.tagCount(); q++) {
+                    tooltip.add(StatCollector.translateToLocalFormatted("aegraph.remote.gui.input",
+                            in.getCompoundTagAt(q).getLong("amount"), name(in.getCompoundTagAt(q))));
+                }
             }
         }
         RenderHelper.disableStandardItemLighting();
@@ -134,16 +139,10 @@ public class GuiRemoteBus extends GuiScreen {
                 TEXT);
         y += 11;
         final List<String> lines = new ArrayList<>();
-        final NBTTagList running = state.getTagList("running", 10);
-        for (int k = 0; k < running.tagCount(); k++) {
-            final NBTTagCompound r = running.getCompoundTagAt(k);
-            lines.add(StatCollector.translateToLocalFormatted("aegraph.remote.gui.running", r.getLong("delivered"),
-                    r.getLong("amount"), name(r)));
-        }
-        final NBTTagList queued = state.getTagList("queued", 10);
-        for (int k = 0; k < queued.tagCount(); k++) {
-            final NBTTagCompound q = queued.getCompoundTagAt(k);
-            lines.add(StatCollector.translateToLocalFormatted("aegraph.remote.gui.queued", q.getLong("amount"), name(q)));
+        final NBTTagList owed = state.getTagList("owed", 10);
+        for (int k = 0; k < owed.tagCount(); k++) {
+            final NBTTagCompound o = owed.getCompoundTagAt(k);
+            lines.add(StatCollector.translateToLocalFormatted("aegraph.remote.gui.owed", o.getLong("amount"), name(o)));
         }
         final NBTTagList deliver = state.getTagList("deliver", 10);
         for (int k = 0; k < deliver.tagCount(); k++) {

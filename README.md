@@ -43,11 +43,9 @@ E P E    A - Advanced Card
 
 ### Remote Crafting Bus
 
-Lets one ME network order crafts from another without merging them. Put the bus on network A facing an ME Interface of network B. The crafts of that interface appear in network A's terminals. Network B calculates and runs them on its own CPUs with its own items, then the bus delivers the result to network A.
+Works like an ME Interface of network A whose machines stand in another, independent network B. Put the bus on network A facing an ME Interface of network B. The patterns of that interface appear in network A with their inputs and outputs.
 
-If network B lacks items for an order, the bus moves exactly the missing items from network A's storage to network B, once per order. Network A never sees network B's patterns, storage or crafting chain. It hands over raw materials and gets the result back.
-
-Network B's machines must return their products into network B (its interface or an import bus of network B), not into network A. Otherwise network B's CPU never sees them and the bus GUI warns about it.
+Network A's CPU gathers or crafts the inputs within its own plan and pushes each run into the bus, like into any ME Interface. The bus hands the run to the interface in network B, which puts it into its machine. The products return into network B's storage, and the bus brings what network A's CPU waits for over to network A. A machine may also return its products straight into network A. Network B needs no CPU; its storage and other patterns stay its own.
 
 The **Priority** button in the bus GUI:
 
@@ -97,8 +95,7 @@ If the graph can't build a plan, AE2's own plan is used and the chat says why.
 
 - The craft confirmation screen shows a flat list instead of AE2's tree.
 - Machines with random outputs are planned by what is written in the pattern.
-- Network B accepts orders from the Remote Crafting Bus only on a free CPU. If all of them are busy, the order waits.
-- Don't link two networks with buses in both directions for the same item with Priority on: the order will loop forever.
+- The Remote Crafting Bus offers only the patterns of the interface it faces. Network B's other interfaces and its storage are not used for network A's crafts.
 
 ## Building
 

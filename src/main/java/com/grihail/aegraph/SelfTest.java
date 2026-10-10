@@ -145,6 +145,9 @@ public final class SelfTest {
         // ... and with two remote ingredients made from the same raw material: 4 bricks + brick block -> furnace
         processes2.add(new Process(new ItemStack[] { new ItemStack(Items.brick, 4), new ItemStack(Blocks.brick_block) },
                 new ItemStack[] { new ItemStack(Blocks.furnace) }));
+        // network A can make the clay network B's machine needs: snow block -> 4 clay
+        processes2.add(new Process(new ItemStack[] { new ItemStack(Blocks.snow) },
+                new ItemStack[] { new ItemStack(Items.clay_ball, 4) }));
 
         // Network B, interface 1 (the one the Remote Crafting Bus faces): clay -> brick, 4 bricks -> brick block
         remoteProcesses.add(new Process(new ItemStack[] { new ItemStack(Items.clay_ball) },
@@ -162,7 +165,6 @@ public final class SelfTest {
     private final List<Process> remoteProcesses = new ArrayList<>();
     private final List<Process> remoteProcesses2 = new ArrayList<>();
     private boolean remoteBuilt;
-    private boolean remoteJobSeen;
 
     @SubscribeEvent
     public void onTick(TickEvent.ServerTickEvent event) {
@@ -486,7 +488,8 @@ public final class SelfTest {
                 check(stored(new ItemStack(Blocks.planks, 1, 2)) == 1, "2 birch planks used");
                 next();
                 return;
-            // 10. Remote Crafting Bus: a second, independent network B with its own storage, CPU and patterns.
+            // 10. Remote Crafting Bus: a second, independent network B with its own storage and patterns. The bus
+            // works like an ME Interface of network A whose machines stand in network B.
             case 36:
                 buildRemote();
                 next();
@@ -503,7 +506,7 @@ public final class SelfTest {
                 if (a == null || b == null) return;
                 final ICraftingGrid ca = a.getCache(ICraftingGrid.class);
                 final ICraftingGrid cb = b.getCache(ICraftingGrid.class);
-                if (cb.getCpus().isEmpty() || GridPatterns.of(cb).size() < 3) return;
+                if (GridPatterns.of(cb).size() < 3) return;
                 if (!GridPatterns.of(ca).containsKey(ae(new ItemStack(Blocks.brick_block)))) return;
                 log("remote bus: " + describeBus());
                 check(a != b, "network A and network B are separate grids");
@@ -513,27 +516,28 @@ public final class SelfTest {
                 final List<ICraftingPatternDetails> blocks = GridPatterns.of(ca)
                         .get(ae(new ItemStack(Blocks.brick_block)));
                 check(blocks.size() == 1 && blocks.get(0) instanceof RemotePattern
-                        && blocks.get(0).getCondensedInputs().length == 0,
-                        "network A sees network B's brick block as one step without inputs (it never plans B's chain)");
-                check(!GridPatterns.of(ca).containsKey(ae(new ItemStack(Items.clay_ball))),
-                        "crafts of network B's other interface are not offered to network A");
+                        && blocks.get(0).getCondensedInputs().length == 1
+                        && blocks.get(0).getCondensedInputs()[0].isSameType(ae(new ItemStack(Items.brick)))
+                        && blocks.get(0).getCondensedInputs()[0].getStackSize() == 4,
+                        "network A sees network B's pattern with its inputs: 4 bricks -> brick block");
+                final List<ICraftingPatternDetails> clay = GridPatterns.of(ca).get(ae(new ItemStack(Items.clay_ball)));
+                check(clay == null || remoteCount(clay) == 0,
+                        "patterns of network B's other interface are not offered to network A");
                 check(!GridPatterns.of(cb).containsKey(ae(new ItemStack(Items.flint))),
                         "network B does not see network A's patterns");
-                final List<ICraftingPatternDetails> glass = GridPatterns.of(ca).get(ae(new ItemStack(Blocks.glass)));
                 final List<ICraftingPatternDetails> bottles = GridPatterns.of(ca)
                         .get(ae(new ItemStack(Items.glass_bottle)));
-                check(glass != null && remoteCount(glass) == 1 && bottles != null && remoteCount(bottles) == 1
-                        && ((RemotePattern) bottles.get(0)).output().getStackSize() == 2,
-                        "both outputs of a two-output pattern are offered to network A (2 bottles per run)");
-                injectB(new ItemStack(Blocks.clay, 2));
-                injectB(new ItemStack(Blocks.sand, 1));
+                check(bottles != null && remoteCount(bottles) == 1
+                        && ((RemotePattern) bottles.get(0)).getCondensedOutputs().length == 2,
+                        "a pattern with two outputs is offered as it is (glass + 2 bottles)");
+                injectB(new ItemStack(Blocks.glass_pane, 1));
                 inject(new ItemStack(Blocks.wool, 4));
                 next();
                 return;
             }
             case 39:
                 if (!waited(5)) return;
-                check(stored(new ItemStack(Blocks.clay)) == 0, "network A does not see network B's storage");
+                check(stored(new ItemStack(Blocks.glass_pane)) == 0, "network A does not see network B's storage");
                 request(new ItemStack(Items.brick), 2);
                 return;
             case 40:
@@ -545,266 +549,194 @@ public final class SelfTest {
             case 42:
                 if (!waited(20)) return;
                 check(stored(new ItemStack(Blocks.wool)) == 2, "not exclusive: network A used its own pattern first");
-                check(storedB(new ItemStack(Blocks.clay)) == 2 && !anyCpuBusyB(), "network B was not asked");
+                check(storedB(new ItemStack(Items.brick)) == 0 && remoteIdle(), "network B was not used");
                 extract(new ItemStack(Items.brick), stored(new ItemStack(Items.brick)));
-                next();
-                return;
-            // 11. An item only network B can make: A runs one opaque step, B calculates and crafts the chain.
-            case 43:
-                remoteJobSeen = false;
-                request(new ItemStack(Blocks.brick_block), 1);
-                return;
-            case 44:
-                awaitPlan("1 brick block through the bus", false);
-                return;
-            case 45:
-                if (stageStart == tick - 1) checkOnlyRemoteStep(new ItemStack(Blocks.brick_block));
-                if (anyCpuBusyB()) remoteJobSeen = true;
-                if (awaitCrafted(new ItemStack(Blocks.brick_block), 1, "1 brick block (network B)", true)) next();
-                return;
-            case 46:
-                if (!waited(40)) return;
-                check(remoteJobSeen, "network B ran the job on its own CPU");
-                check(!anyCpuBusyB(), "network B's CPU is free again");
-                check(storedB(new ItemStack(Blocks.clay)) == 1 && storedB(new ItemStack(Items.clay_ball)) == 0
-                        && storedB(new ItemStack(Items.brick)) == 0,
-                        "network B calculated the chain itself: 1 clay block -> 4 clay -> 4 bricks -> brick block");
-                check(storedB(new ItemStack(Blocks.brick_block)) == 0, "the result went to network A");
-                goTo(70);
-                return;
-            // 11b. The second output of a pattern: network A orders bottles, network B runs sand -> glass + bottles.
-            case 70:
-                request(new ItemStack(Items.glass_bottle), 2);
-                return;
-            case 71:
-                awaitPlan("2 bottles (second output of network B's pattern)", false);
-                return;
-            case 72:
-                if (awaitCrafted(new ItemStack(Items.glass_bottle), 2, "2 bottles (network B)", true)) next();
-                return;
-            case 73:
-                if (!waited(40)) return;
-                check(stored(new ItemStack(Items.glass_bottle)) == 2 && storedB(new ItemStack(Blocks.sand)) == 0,
-                        "network B made the bottles from its sand and sent them to network A");
-                check(storedB(new ItemStack(Blocks.glass)) == 1 && stored(new ItemStack(Blocks.glass)) == 0,
-                        "the other output of that pattern (glass) stayed in network B");
-                goTo(47);
-                return;
-            // 12. Exclusive ("priority"): network A's own brick pattern is no longer used.
-            case 47:
                 bus().setExclusive(true);
                 next();
                 return;
-            case 48: {
+            // 11. Exclusive ("priority"): network A's own brick pattern is no longer used. A brick block: network A
+            // pushes its clay into network B's machine 4 times, then the 4 bricks it got back once more.
+            case 43: {
                 if (!waited(5)) return;
                 final List<ICraftingPatternDetails> bricks = GridPatterns
                         .of((ICraftingGrid) grid().getCache(ICraftingGrid.class)).get(ae(new ItemStack(Items.brick)));
                 check(bricks.size() == 1 && bricks.get(0) instanceof RemotePattern,
                         "exclusive: network A's own brick pattern is hidden from its calculators");
-                // AE2's own calculator and a plain CPU must handle the remote step as well.
-                AEGraphConfig.enabled = false;
-                remoteJobSeen = false;
-                requestAny(new ItemStack(Items.brick), 3);
+                inject(new ItemStack(Items.clay_ball, 4));
+                bCpuUsed = false;
+                request(new ItemStack(Blocks.brick_block), 1);
                 return;
             }
+            case 44:
+                awaitPlan("1 brick block through the bus", false);
+                if (stage == 45) check(planTakes(new ItemStack(Items.clay_ball)) == 4,
+                        "network A's plan gathers the inputs itself: 4 clay");
+                return;
+            case 45:
+                bCpuUsed |= anyCpuBusyB();
+                if (awaitCrafted(new ItemStack(Blocks.brick_block), 1, "1 brick block (network B's machine)", true)) {
+                    next();
+                }
+                return;
+            case 46:
+                if (!waited(40)) return;
+                check(stored(new ItemStack(Blocks.brick_block)) == 1 && stored(new ItemStack(Items.clay_ball)) == 0
+                        && stored(new ItemStack(Items.brick)) == 0,
+                        "network A's 4 clay became 4 bricks and a brick block in network B's machine");
+                check(remoteClean(), "network B kept nothing, the bus owes nothing");
+                check(!bCpuUsed, "network B's CPU was not used");
+                extract(new ItemStack(Blocks.brick_block), 1);
+                next();
+                return;
+            // 11b. Both outputs of a pattern come back: sand -> glass + 2 bottles.
+            case 47:
+                before = stored(new ItemStack(Blocks.glass));
+                inject(new ItemStack(Blocks.sand, 1));
+                request(new ItemStack(Items.glass_bottle), 2);
+                return;
+            case 48:
+                awaitPlan("2 bottles (two outputs of network B's pattern)", false);
+                return;
             case 49:
-                awaitPlan("3 bricks (exclusive, AE2 calculator)", false);
+                if (awaitCrafted(new ItemStack(Items.glass_bottle), 2, "2 bottles (network B)", true)) next();
                 return;
             case 50:
-                if (anyCpuBusyB()) remoteJobSeen = true;
-                if (awaitCrafted(new ItemStack(Items.brick), 3, "3 bricks (exclusive, AE2 calculator)", true)) next();
-                return;
-            case 51:
                 if (!waited(40)) return;
-                AEGraphConfig.enabled = true;
-                check(remoteJobSeen && stored(new ItemStack(Blocks.wool)) == 2,
-                        "exclusive with AE2's calculator: made by network B, wool untouched");
-                check(storedB(new ItemStack(Blocks.clay)) == 0 && storedB(new ItemStack(Items.clay_ball)) == 1,
-                        "network B used its own clay for 3 bricks");
-                extract(new ItemStack(Items.brick), stored(new ItemStack(Items.brick)));
+                check(stored(new ItemStack(Items.glass_bottle)) == 2 && stored(new ItemStack(Blocks.glass)) == before + 1,
+                        "the bottles and the other output (glass) came to network A");
+                check(remoteClean(), "bottles: network B kept nothing");
+                extract(new ItemStack(Items.glass_bottle), 2);
                 next();
+                return;
+            // 12. AE2's own calculator and a plain CPU push into the bus as well.
+            case 51:
+                AEGraphConfig.enabled = false;
+                inject(new ItemStack(Items.clay_ball, 3));
+                requestAny(new ItemStack(Items.brick), 3);
                 return;
             case 52:
-                request(new ItemStack(Items.brick), 1);
+                awaitPlan("3 bricks (exclusive, AE2 calculator)", false);
                 return;
             case 53:
-                awaitPlan("1 brick (exclusive, graph)", false);
+                if (awaitCrafted(new ItemStack(Items.brick), 3, "3 bricks (exclusive, AE2 calculator)", true)) next();
                 return;
             case 54:
-                if (awaitCrafted(new ItemStack(Items.brick), 1, "1 brick (exclusive, graph)", true)) next();
-                return;
-            case 55:
-                if (!waited(40)) return;
-                check(stored(new ItemStack(Blocks.wool)) == 2 && storedB(new ItemStack(Items.clay_ball)) == 0,
-                        "exclusive with the graph planner: made by network B, wool untouched");
-                extract(new ItemStack(Items.brick), stored(new ItemStack(Items.brick)));
-                next();
-                return;
-            // 13. Network B lacks items: the bus waits and retries; cancelling in network A drops the request.
-            case 56:
-                request(new ItemStack(Items.brick), 2);
-                return;
-            case 57:
-                awaitPlan("2 bricks (network B has no clay)", false);
-                return;
-            case 58: {
-                if (!waited(60)) return;
-                final NBTTagCompound state = bus().describe();
-                log("remote bus: " + state);
-                check("aegraph.remote.problem.lacking".equals(state.getString("problem"))
-                        && state.getString("problemArg").contains(new ItemStack(Blocks.clay).getDisplayName()),
-                        "the bus reports what neither network has: " + state.getString("problemArg"));
-                check(state.getTagList("queued", 10).tagCount() == 1, "the request waits in the bus");
-                check(anyCpuBusy(), "network A's CPU waits for the bricks");
-                for (final ICraftingCPU cpu : ((ICraftingGrid) grid().getCache(ICraftingGrid.class)).getCpus()) {
-                    if (cpu.isBusy()) ((CraftingCPUCluster) cpu).cancel();
-                }
-                next();
-                return;
-            }
-            case 59: {
-                if (!waited(160)) return;
-                final NBTTagCompound state = bus().describe();
-                check(state.getTagList("queued", 10).tagCount() == 0 && state.getTagList("running", 10).tagCount() == 0,
-                        "cancelled in network A: the bus dropped the request");
-                check(!anyCpuBusy() && !anyCpuBusyB(), "no CPU left busy in either network");
-                goTo(80);
-                return;
-            }
-            // 13b. Network B lacks items that network A has: the bus moves them from A's storage into B's.
-            case 80:
-                inject(new ItemStack(Blocks.clay, 1));
-                request(new ItemStack(Items.brick), 4);
-                return;
-            case 81:
-                awaitPlan("4 bricks (the clay is in network A)", false);
-                return;
-            case 82:
-                if (awaitCrafted(new ItemStack(Items.brick), 4, "4 bricks from network A's clay", true)) next();
-                return;
-            case 83: {
-                if (!waited(40)) return;
-                final NBTTagCompound state = bus().describe();
-                log("remote bus: " + state);
-                check(stored(new ItemStack(Items.brick)) == 4 && stored(new ItemStack(Blocks.clay)) == 0,
-                        "network A's clay went to network B and came back as 4 bricks");
-                check(storedB(new ItemStack(Blocks.clay)) == 0 && storedB(new ItemStack(Items.clay_ball)) == 0
-                        && storedB(new ItemStack(Items.brick)) == 0, "network B used exactly what it got");
-                check(!state.hasKey("problem") && state.getTagList("queued", 10).tagCount() == 0
-                        && state.getTagList("running", 10).tagCount() == 0
-                        && state.getTagList("deliver", 10).tagCount() == 0, "the bus has nothing left");
-                check(!anyCpuBusy() && !anyCpuBusyB(), "both CPUs free");
-                extract(new ItemStack(Items.brick), stored(new ItemStack(Items.brick)));
-                next();
-                return;
-            }
-            // 13c. The remote item is an ingredient, not the result: 2 flower pots in network A need 4 bricks from network B, which lacks the clay network A has. Graph planner first, then AE2's calculator.
-            case 84:
-                inject(new ItemStack(Blocks.clay, 1));
-                request(new ItemStack(Items.flower_pot), 2);
-                return;
-            case 85:
-                awaitPlan("2 flower pots (bricks from network B, graph)", false);
-                return;
-            case 86:
-                if (awaitCrafted(new ItemStack(Items.flower_pot), 2, "2 flower pots (graph)", true)) next();
-                return;
-            case 87:
-                if (!waited(40)) return;
-                checkPots("graph");
-                AEGraphConfig.enabled = false;
-                inject(new ItemStack(Blocks.clay, 1));
-                requestAny(new ItemStack(Items.flower_pot), 2);
-                return;
-            case 88:
-                awaitPlan("2 flower pots (bricks from network B, AE2 calculator)", false);
-                return;
-            case 89:
-                if (awaitCrafted(new ItemStack(Items.flower_pot), 2, "2 flower pots (AE2 calculator)", true)) next();
-                return;
-            case 90:
                 if (!waited(40)) return;
                 AEGraphConfig.enabled = true;
-                checkPots("AE2 calculator");
+                check(stored(new ItemStack(Items.brick)) == 3 && stored(new ItemStack(Blocks.wool)) == 2
+                        && stored(new ItemStack(Items.clay_ball)) == 0,
+                        "exclusive with AE2's calculator: network A's clay through network B, wool untouched");
+                check(remoteClean(), "AE2 calculator: network B kept nothing");
+                extract(new ItemStack(Items.brick), 3);
                 next();
                 return;
-            // 13d. Two remote ingredients from the same raw material, network B has one CPU: the bus calculates, supplies and starts them one after another, each takes exactly its share of network A's clay.
-            case 91:
-                // the brick block of step 11 is still in network A's storage
-                extract(new ItemStack(Blocks.brick_block), stored(new ItemStack(Blocks.brick_block)));
-                inject(new ItemStack(Blocks.clay, 2));
+            // 13. Network A lacks the inputs: its plan is incomplete, like with any interface pattern.
+            case 55:
+                request(new ItemStack(Items.brick), 2);
+                return;
+            case 56:
+                awaitPlan("2 bricks (no clay anywhere)", true);
+                return;
+            // 13b. The remote item is an ingredient: 1 flower pot needs 2 bricks from network B.
+            case 57:
+                inject(new ItemStack(Items.clay_ball, 2));
+                request(new ItemStack(Items.flower_pot), 1);
+                return;
+            case 58:
+                awaitPlan("1 flower pot (bricks from network B, graph)", false);
+                return;
+            case 59:
+                if (awaitCrafted(new ItemStack(Items.flower_pot), 1, "1 flower pot (graph)", true)) next();
+                return;
+            case 60:
+                if (!waited(40)) return;
+                checkPots(1, "graph");
+                AEGraphConfig.enabled = false;
+                inject(new ItemStack(Items.clay_ball, 2));
+                requestAny(new ItemStack(Items.flower_pot), 1);
+                return;
+            case 61:
+                awaitPlan("1 flower pot (bricks from network B, AE2 calculator)", false);
+                return;
+            case 62:
+                if (awaitCrafted(new ItemStack(Items.flower_pot), 1, "1 flower pot (AE2 calculator)", true)) next();
+                return;
+            case 63:
+                if (!waited(40)) return;
+                AEGraphConfig.enabled = true;
+                checkPots(1, "AE2 calculator");
+                next();
+                return;
+            // 13c. Two remote ingredients: 4 bricks + a brick block (4 more bricks) -> furnace.
+            case 64:
+                inject(new ItemStack(Items.clay_ball, 8));
                 request(new ItemStack(Blocks.furnace), 1);
                 return;
-            case 92:
+            case 65:
                 awaitPlan("1 furnace (bricks and a brick block from network B)", false);
                 return;
-            case 93:
+            case 66:
                 if (awaitCrafted(new ItemStack(Blocks.furnace), 1, "1 furnace (two remote ingredients)", true)) next();
                 return;
-            case 94: {
+            case 67:
                 if (!waited(40)) return;
-                final NBTTagCompound state = bus().describe();
-                log("remote bus: " + state);
-                check(stored(new ItemStack(Blocks.furnace)) == 1 && stored(new ItemStack(Blocks.clay)) == 0
+                check(stored(new ItemStack(Blocks.furnace)) == 1 && stored(new ItemStack(Items.clay_ball)) == 0
                         && stored(new ItemStack(Items.brick)) == 0 && stored(new ItemStack(Blocks.brick_block)) == 0,
-                        "two remote ingredients: network A's 2 clay blocks became bricks and a brick block");
-                check(storedB(new ItemStack(Blocks.clay)) == 0 && storedB(new ItemStack(Items.clay_ball)) == 0
-                        && storedB(new ItemStack(Items.brick)) == 0, "two remote ingredients: network B used exactly "
-                                + "what it got");
-                check(state.getTagList("queued", 10).tagCount() == 0 && state.getTagList("running", 10).tagCount() == 0
-                        && !anyCpuBusy() && !anyCpuBusyB(), "two remote ingredients: nothing left, CPUs free");
+                        "two remote ingredients: network A's 8 clay became bricks and a brick block");
+                check(remoteClean(), "two remote ingredients: network B kept nothing");
                 extract(new ItemStack(Blocks.furnace), 1);
                 next();
                 return;
-            }
-            // 13e. Network B's machine puts its products into network A: network A's CPU takes them, the bus warns and cancels network B's job, which would wait forever otherwise.
-            case 95:
+            // 13d. Network A crafts the inputs first in the same job: snow -> 4 clay, then 2 flower pots.
+            case 68:
+                inject(new ItemStack(Blocks.snow, 1));
+                request(new ItemStack(Items.flower_pot), 2);
+                return;
+            case 69:
+                awaitPlan("2 flower pots (the clay is crafted in network A)", false);
+                return;
+            case 70:
+                if (awaitCrafted(new ItemStack(Items.flower_pot), 2, "2 flower pots (clay crafted in A)", true)) next();
+                return;
+            case 71:
+                if (!waited(40)) return;
+                check(stored(new ItemStack(Blocks.snow)) == 0, "network A crafted the clay from its snow");
+                checkPots(2, "clay crafted in network A");
+                next();
+                return;
+            // 13e. Network B's machine puts its products straight into network A: fine, the bus fetches nothing.
+            case 72:
                 leakB = true;
-                elsewhereSeen = false;
-                remoteProcesses.get(0).every = 60;
-                injectB(new ItemStack(Items.clay_ball, 4));
-                request(new ItemStack(Items.brick), 4);
+                inject(new ItemStack(Items.clay_ball, 2));
+                request(new ItemStack(Items.brick), 2);
                 return;
-            case 96:
-                awaitPlan("4 bricks (network B's machine leaks into network A)", false);
+            case 73:
+                awaitPlan("2 bricks (network B's machine returns them into network A)", false);
                 return;
-            case 97:
-                if ("aegraph.remote.problem.elsewhere".equals(bus().describe().getString("problem"))) {
-                    elsewhereSeen = true;
-                }
-                if (awaitCrafted(new ItemStack(Items.brick), 4, "4 bricks (leaking machine)", true)) next();
+            case 74:
+                if (awaitCrafted(new ItemStack(Items.brick), 2, "2 bricks (machine returns into A)", true)) next();
                 return;
-            case 98: {
-                if ("aegraph.remote.problem.elsewhere".equals(bus().describe().getString("problem"))) {
-                    elsewhereSeen = true;
-                }
-                if (waited(600)) throw new IllegalStateException("network B's job was not cancelled: " + describeBus());
-                if (anyCpuBusyB()) return;
+            case 75:
+                if (!waited(40)) return;
                 leakB = false;
-                remoteProcesses.get(0).every = 0;
-                final NBTTagCompound state = bus().describe();
-                log("remote bus: " + state);
-                check(elsewhereSeen, "the bus warned that the bricks came past it");
-                check(stored(new ItemStack(Items.brick)) == 4 && storedB(new ItemStack(Items.clay_ball)) == 0,
-                        "leaking machine: network A got its 4 bricks");
-                check(state.getTagList("queued", 10).tagCount() == 0 && state.getTagList("running", 10).tagCount() == 0
-                        && !anyCpuBusy(), "leaking machine: network B's job cancelled, nothing left");
-                extract(new ItemStack(Items.brick), 4);
-                goTo(60);
+                check(stored(new ItemStack(Items.brick)) == 2 && remoteClean(),
+                        "products straight into network A: the bus owes nothing");
+                extract(new ItemStack(Items.brick), 2);
+                next();
                 return;
-            }
-            // 14. Reload in the middle of a remote job (slow machine in network B): phase 1 stops the server here, phase 2 (-Daegraph.selftest.resume=true, same world) checks that the job finishes after the restart.
-            case 60:
-                injectB(new ItemStack(Blocks.clay, 2));
+            // 14. Reload in the middle (slow machine in network B): phase 1 stops the server here, phase 2
+            // (-Daegraph.selftest.resume=true, same world) checks that the job finishes after the restart.
+            case 76:
+                inject(new ItemStack(Items.clay_ball, 6));
                 remoteProcesses.get(0).every = 20;
                 request(new ItemStack(Items.brick), 6);
                 return;
-            case 61:
+            case 77:
                 awaitPlan("6 bricks (slow machine in network B)", false);
                 return;
-            case 62:
+            case 78:
                 if (waited(1200)) throw new IllegalStateException("remote job did not start: " + describeBus());
-                if (stored(new ItemStack(Items.brick)) < 2 || !anyCpuBusyB()) return;
+                if (stored(new ItemStack(Items.brick)) < 2) return;
                 log("stopping the server in the middle of the remote job (" + stored(new ItemStack(Items.brick))
                         + " of 6 bricks delivered): " + describeBus());
                 finish();
@@ -815,7 +747,8 @@ public final class SelfTest {
                 if (!"aegraph.remote.state.ok".equals(bus().describe().getString("state"))) return;
                 log("after reload: " + describeBus());
                 check(anyCpuBusy(), "after reload: network A's CPU still waits for the bricks");
-                check(anyCpuBusyB(), "after reload: network B's CPU still crafts them");
+                check(bus().describe().getTagList("owed", 10).tagCount() == 1,
+                        "after reload: the bus still expects bricks from network B");
                 next();
                 return;
             }
@@ -824,13 +757,9 @@ public final class SelfTest {
                 return;
             case 102: {
                 if (!waited(60)) return;
-                final NBTTagCompound state = bus().describe();
-                check(stored(new ItemStack(Items.brick)) == 6, "after reload: all 6 bricks reached network A");
-                check(!anyCpuBusy() && !anyCpuBusyB(), "after reload: both CPUs free");
-                check(storedB(new ItemStack(Items.clay_ball)) == 2 && storedB(new ItemStack(Items.brick)) == 0,
-                        "after reload: network B made exactly 6 bricks");
-                check(state.getTagList("queued", 10).tagCount() == 0 && state.getTagList("running", 10).tagCount() == 0
-                        && state.getTagList("deliver", 10).tagCount() == 0, "after reload: the bus has nothing left");
+                check(stored(new ItemStack(Items.brick)) == 6 && stored(new ItemStack(Items.clay_ball)) == 0,
+                        "after reload: all 6 bricks reached network A");
+                check(!anyCpuBusy() && remoteClean(), "after reload: CPU free, the bus has nothing left");
                 finish();
                 return;
             }
@@ -882,23 +811,46 @@ public final class SelfTest {
     }
 
     private MachineSource sourceB;
-    /** Network B's machines put their products into network A (a wrongly piped network B). */
+    /** Network B's machines put their products straight into network A. */
     private boolean leakB;
-    private boolean elsewhereSeen;
+    private boolean bCpuUsed;
 
-    /** After 2 flower pots made from network B's bricks: everything used up, nothing left anywhere. */
-    private void checkPots(String how) {
+    /** After flower pots made from network B's bricks: everything used up, nothing left anywhere. */
+    private void checkPots(int pots, String how) {
+        check(stored(new ItemStack(Items.flower_pot)) == pots && stored(new ItemStack(Items.brick)) == 0
+                && stored(new ItemStack(Items.clay_ball)) == 0,
+                how + ": network A's clay became bricks in network B and " + pots + " flower pot(s) in network A");
+        check(remoteClean(), how + ": network B kept nothing, the bus owes nothing");
+        check(!anyCpuBusy(), how + ": CPUs free");
+        extract(new ItemStack(Items.flower_pot), pots);
+    }
+
+    /** Network B's storage has nothing of the test chains and the bus owes and holds nothing. */
+    private boolean remoteClean() {
         final NBTTagCompound state = bus().describe();
-        log("remote bus: " + state);
-        check(stored(new ItemStack(Items.flower_pot)) == 2 && stored(new ItemStack(Items.brick)) == 0
-                && stored(new ItemStack(Blocks.clay)) == 0,
-                how + ": network A's clay went to network B, its bricks became 2 flower pots in network A");
-        check(storedB(new ItemStack(Blocks.clay)) == 0 && storedB(new ItemStack(Items.clay_ball)) == 0
-                && storedB(new ItemStack(Items.brick)) == 0, how + ": network B used exactly what it got");
-        check(state.getTagList("queued", 10).tagCount() == 0 && state.getTagList("running", 10).tagCount() == 0
-                && state.getTagList("deliver", 10).tagCount() == 0, how + ": the bus has nothing left");
-        check(!anyCpuBusy() && !anyCpuBusyB(), how + ": both CPUs free");
-        extract(new ItemStack(Items.flower_pot), stored(new ItemStack(Items.flower_pot)));
+        final boolean clean = storedB(new ItemStack(Items.clay_ball)) == 0 && storedB(new ItemStack(Items.brick)) == 0
+                && storedB(new ItemStack(Blocks.brick_block)) == 0 && storedB(new ItemStack(Blocks.glass)) == 0
+                && storedB(new ItemStack(Items.glass_bottle)) == 0 && state.getTagList("owed", 10).tagCount() == 0
+                && state.getTagList("deliver", 10).tagCount() == 0;
+        if (!clean) log("remote bus: " + state);
+        return clean;
+    }
+
+    /** The bus owes nothing and network B's machine chest is empty. */
+    private boolean remoteIdle() {
+        final IInventory chest = (IInventory) world.getTileEntity(x0, y0, z0 + 2);
+        for (int s = 0; s < chest.getSizeInventory(); s++) {
+            if (chest.getStackInSlot(s) != null) return false;
+        }
+        return bus().describe().getTagList("owed", 10).tagCount() == 0;
+    }
+
+    /** How many of the item the submitted plan takes from storage. */
+    private long planTakes(ItemStack what) {
+        final IItemList<IAEItemStack> plan = AEApi.instance().storage().createItemList();
+        job.populatePlan(plan);
+        final IAEItemStack s = plan.findPrecise(AEItemStack.create(what));
+        return s == null ? 0 : s.getStackSize();
     }
 
     private PartRemoteBus bus() {
@@ -950,17 +902,6 @@ public final class SelfTest {
             if (p instanceof RemotePattern) n++;
         }
         return n;
-    }
-
-    /** Network A's plan takes nothing from storage and has one step: the remote craft of the target. */
-    private void checkOnlyRemoteStep(ItemStack target) {
-        final IItemList<IAEItemStack> plan = AEApi.instance().storage().createItemList();
-        job.populatePlan(plan);
-        boolean onlyTarget = true;
-        for (final IAEItemStack s : plan) {
-            if (s.getStackSize() > 0 || !s.isSameType(AEItemStack.create(target))) onlyTarget = false;
-        }
-        check(onlyTarget, "network A's plan has no ingredients of network B's chain: " + plan);
     }
 
     private boolean byproductSeenEarly;

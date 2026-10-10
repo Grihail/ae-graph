@@ -2,45 +2,34 @@ package com.grihail.aegraph.remote;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Future;
 
 import net.minecraft.client.renderer.RenderBlocks;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.inventory.InventoryCrafting;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.Vec3;
-import net.minecraft.world.World;
 import net.minecraftforge.common.util.ForgeDirection;
 
-import com.google.common.collect.ImmutableSet;
 import com.grihail.aegraph.AEGraphMod;
-import com.grihail.aegraph.ae.GraphCpus;
 import com.grihail.aegraph.network.AEGraphNetwork;
 
-import appeng.api.AEApi;
 import appeng.api.config.Actionable;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.IGridNode;
-import appeng.api.networking.crafting.ICraftingCPU;
-import appeng.api.networking.crafting.ICraftingGrid;
-import appeng.api.networking.crafting.ICraftingJob;
-import appeng.api.networking.crafting.ICraftingLink;
 import appeng.api.networking.crafting.ICraftingPatternDetails;
 import appeng.api.networking.crafting.ICraftingProvider;
 import appeng.api.networking.crafting.ICraftingMedium;
 import appeng.api.networking.crafting.ICraftingProviderHelper;
-import appeng.api.networking.crafting.ICraftingRequester;
 import appeng.api.networking.events.MENetworkCraftingPatternChange;
 import appeng.api.networking.security.BaseActionSource;
-import appeng.api.networking.security.IActionHost;
 import appeng.api.networking.security.MachineSource;
 import appeng.api.networking.storage.IStorageGrid;
 import appeng.api.networking.ticking.IGridTickable;
@@ -52,15 +41,10 @@ import appeng.api.parts.IPartHost;
 import appeng.api.parts.IPartRenderHelper;
 import appeng.api.storage.IMEMonitor;
 import appeng.api.storage.data.IAEItemStack;
-import appeng.api.storage.data.IItemList;
-import appeng.api.util.AECableType;
 import appeng.client.texture.CableBusTextures;
-import appeng.crafting.CraftingLink;
 import appeng.helpers.DualityInterface;
 import appeng.helpers.IInterfaceHost;
 import appeng.me.GridAccessException;
-import appeng.me.cache.CraftingGridCache;
-import appeng.me.cluster.implementations.CraftingCPUCluster;
 import appeng.parts.PartBasicState;
 import appeng.util.item.AEItemStack;
 import cpw.mods.fml.relauncher.Side;
@@ -69,93 +53,37 @@ import cpw.mods.fml.relauncher.SideOnly;
 /**
  * Remote Crafting Bus: sits on a cable of network A and faces an ME Interface of another, independent network B.
  * <p>
- * The crafts of that interface (every output of each of its patterns) show up in network A as craftable.
- * Network A plans them as one opaque step "nothing -> item": its calculator never looks inside network B. When a
- * CPU of network A runs such a step, the bus asks network B to craft the item - B calculates the whole chain with
- * its own patterns, storage and CPUs - and the bus moves what B's CPU delivers into network A, where A's CPU is
- * waiting for it. The two grids stay separate: no storage, patterns or crafting calculations are shared.
+ * For network A it works like an ME Interface whose machines stand in network B. The patterns of the faced interface
+ * show up in network A with their inputs and outputs ({@link RemotePattern}). Network A's CPU gathers or crafts the
+ * inputs in its own plan and pushes a run into the bus; the bus hands it to the interface in network B, which
+ * pushes it into its machine. What the machine makes comes back into network B's storage, and the bus brings what
+ * network A's CPU waits for over to network A (a machine may also return its products straight into network A).
+ * Network B shares nothing else: its storage, other patterns and CPUs stay its own.
  * <p>
  * Exclusive mode ("priority"): network A crafts these items only through this bus, its own patterns for them are
  * hidden from its calculators.
  */
 public class PartRemoteBus extends PartBasicState implements ICraftingProvider, IGridTickable {
 
-    /** Wait after network B could not take a request (missing items, no free CPU). */
-    private static final int RETRY_TICKS = 100;
-    /** Network A stopped waiting for an item this long ago: drop what is still queued for it in network B. */
-    private static final int CANCEL_GRACE_TICKS = 100;
-
     /** Live buses on the server, for the CPU hooks. */
     static final java.util.Set<PartRemoteBus> LIVE = Collections
             .newSetFromMap(new java.util.WeakHashMap<PartRemoteBus, Boolean>());
 
-    /** A job running on a CPU of network B for us. */
-    private static final class Request {
-
-        final ICraftingLink link;
-        final IAEItemStack item;
-        final long amount;
-        long delivered;
-
-        Request(ICraftingLink link, IAEItemStack item, long amount) {
-            this.link = link;
-            this.item = item;
-            this.amount = amount;
-        }
-    }
-
-    /** A request being calculated in network B (null future: the calculation starts on the next tick). */
-    private static final class Calculation {
-
-        final IAEItemStack item;
-        final long amount;
-        /** Network B already got what it lacked for this attempt from network A. */
-        final boolean supplied;
-        Future<ICraftingJob> future;
-
-        Calculation(IAEItemStack item, long amount, boolean supplied) {
-            this.item = item;
-            this.amount = amount;
-            this.supplied = supplied;
-        }
-    }
-
-    /**
-     * Network B -> the bus whose request it is calculating. One request per network B at a time: each one is
-     * calculated, supplied and started before the next one looks at network B's storage and CPUs, so requests never
-     * count on the same items.
-     */
-    private static final Map<IGrid, PartRemoteBus> TURNS = new java.util.WeakHashMap<>();
-    /** A turn older than this is taken over (a calculation that never ends). */
-    private static final int TURN_TIMEOUT_TICKS = 2400;
-
     private final BaseActionSource ownSource;
-    private final Requester requester = new Requester();
-    private final BaseActionSource remoteSource = new MachineSource(requester);
 
     private boolean exclusive;
-    /** Item (size 1) -> amount network A asked for that network B has not taken yet. */
-    private final Map<IAEItemStack, Long> queued = new LinkedHashMap<>();
-    private final List<Request> running = new ArrayList<>();
-    /** Item (size 1) -> amount network B delivered that network A did not accept yet. */
+    /** Item (size 1) -> amount pushed runs still have to bring back from network B. */
+    private final Map<IAEItemStack, Long> owed = new LinkedHashMap<>();
+    /** Item (size 1) -> amount taken from network B that network A did not accept yet. */
     private final Map<IAEItemStack, Long> toDeliver = new LinkedHashMap<>();
-
-    private Calculation calculation;
-    private long turnSince;
-    private final Map<IAEItemStack, Long> retryAt = new HashMap<>();
-    private final Map<IAEItemStack, Long> unneededSince = new HashMap<>();
 
     private List<RemotePattern> exported = Collections.emptyList();
     private int exportedSignature = 0;
     private IInterfaceHost target;
     private IGrid remoteGrid;
-    /** Network B our running links are registered with (links must be re-registered after a reload). */
-    private IGrid linkedGrid;
     private boolean removed;
     private String stateKey = "aegraph.remote.state.offline";
     private String stateArg = "";
-    private String problemKey;
-    private String problemArg = "";
 
     public PartRemoteBus(ItemStack is) {
         super(is);
@@ -191,7 +119,7 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
         return node == null ? null : node.getGrid();
     }
 
-    /** Re-reads the facing interface; tells network A when the set of offered crafts changed. */
+    /** Re-reads the facing interface; tells network A when the set of offered patterns changed. */
     private void refresh() {
         target = findTarget();
         final IGrid own = ownGrid();
@@ -211,69 +139,35 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
             setState("aegraph.remote.state.remoteOffline", "");
         } else {
             final TileEntity t = target.getTileEntity();
-            setState("aegraph.remote.state.ok",
-                    t == null ? "?" : t.xCoord + " " + t.yCoord + " " + t.zCoord);
+            setState("aegraph.remote.state.ok", t == null ? "?" : t.xCoord + " " + t.yCoord + " " + t.zCoord);
             collectExports(target.getInterfaceDuality(), now);
         }
         remoteGrid = remote;
         final int signature = now.hashCode() * 31 + (exclusive ? 1 : 0);
-        if (signature != exportedSignature || now.size() != exported.size()) {
-            exported = now;
-            exportedSignature = signature;
-            if (own != null) own.postEvent(new MENetworkCraftingPatternChange(this, getProxy().getNode()));
-        }
+        final boolean changed = signature != exportedSignature || now.size() != exported.size();
+        // Always the fresh list: it holds the interface's current pattern objects.
+        exported = now;
+        exportedSignature = signature;
+        if (changed && own != null) own.postEvent(new MENetworkCraftingPatternChange(this, getProxy().getNode()));
     }
 
-    /**
-     * Every output of every pattern in the interface, once per item. An item that is the main output of some
-     * pattern takes its per-run amount from that pattern, otherwise from the first pattern that makes it.
-     */
+    /** Every pattern of the faced interface, as it is. */
     private void collectExports(DualityInterface duality, List<RemotePattern> out) {
         if (duality == null) return;
-        final List<ICraftingPatternDetails> patterns = new ArrayList<>();
+        final TileEntity self = getHost().getTile();
+        final int dim = self.getWorldObj().provider.dimensionId;
         duality.provideCrafting(new ICraftingProviderHelper() {
 
             @Override
             public void addCraftingOption(ICraftingMedium medium, ICraftingPatternDetails details) {
-                patterns.add(details);
+                final RemotePattern pattern = new RemotePattern(dim, self.xCoord, self.yCoord, self.zCoord,
+                        getSide().ordinal(), details, exclusive);
+                if (pattern.getCondensedOutputs().length > 0 && !out.contains(pattern)) out.add(pattern);
             }
 
             @Override
             public void setEmitable(IAEItemStack item) {}
         });
-        final TileEntity self = getHost().getTile();
-        final int dim = self.getWorldObj().provider.dimensionId;
-        final Map<IAEItemStack, IAEItemStack> items = new LinkedHashMap<>();
-        for (final boolean mainOnly : new boolean[] { true, false }) {
-            for (final ICraftingPatternDetails details : patterns) {
-                final List<IAEItemStack> outputs = outputs(details);
-                for (int k = 0; k < outputs.size() && (!mainOnly || k == 0); k++) {
-                    items.putIfAbsent(outputs.get(k).copy().setStackSize(1), outputs.get(k));
-                }
-            }
-        }
-        for (final IAEItemStack item : items.values()) {
-            out.add(new RemotePattern(dim, self.xCoord, self.yCoord, self.zCoord, getSide().ordinal(), item,
-                    exclusive));
-        }
-    }
-
-    /** Outputs in encoded order, one entry per item with the amount one run makes of it. */
-    static List<IAEItemStack> outputs(ICraftingPatternDetails details) {
-        final List<IAEItemStack> list = new ArrayList<>();
-        final IAEItemStack[] outputs = details.getOutputs();
-        if (outputs == null) return list;
-        outer: for (final IAEItemStack s : outputs) {
-            if (s == null || s.getStackSize() <= 0) continue;
-            for (final IAEItemStack have : list) {
-                if (have.isSameType(s)) {
-                    have.incStackSize(s.getStackSize());
-                    continue outer;
-                }
-            }
-            list.add(s.copy());
-        }
-        return list;
     }
 
     private void setState(String key, String arg) {
@@ -281,7 +175,7 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
         stateArg = arg;
     }
 
-    // --- network A: crafting provider ----------------------------------------------------------------------
+    // --- network A: crafting provider and medium -----------------------------------------------------------
 
     @Override
     public void provideCrafting(ICraftingProviderHelper craftingTracker) {
@@ -289,40 +183,45 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
         for (final RemotePattern pattern : exported) craftingTracker.addCraftingOption(this, pattern);
     }
 
-    /** AE2's CPU cannot push a pattern without inputs; {@link RemoteCrafting} hands the runs to {@link #accept}. */
-    @Override
-    public boolean pushPattern(ICraftingPatternDetails patternDetails, net.minecraft.inventory.InventoryCrafting table) {
-        return false;
-    }
-
-    @Override
-    public boolean isBusy() {
-        return false;
+    /** The faced interface's pattern a run of ours stands for (patterns restored from a saved job have none). */
+    private ICraftingPatternDetails sourceOf(ICraftingPatternDetails details) {
+        if (!(details instanceof RemotePattern)) return null;
+        for (final RemotePattern p : exported) {
+            if (p.equals(details)) return p.source;
+        }
+        return null;
     }
 
     /**
-     * A CPU of network A runs {@code runs} times one of our patterns. False: the bus can't take it now (no
-     * connection to network B), the CPU keeps the task and asks again.
+     * A CPU of network A pushes a run: the inputs go to the interface in network B, which puts them into its
+     * machine. The outputs are owed until they come back.
      */
-    boolean accept(RemotePattern pattern, long runs) {
-        if (removed || remoteGrid == null || !exported.contains(pattern) || runs <= 0) return false;
-        final IAEItemStack key = pattern.output().copy().setStackSize(1);
-        queued.merge(key, pattern.output().getStackSize() * runs, Long::sum);
-        unneededSince.remove(key);
-        retryAt.remove(key);
+    @Override
+    public boolean pushPattern(ICraftingPatternDetails patternDetails, InventoryCrafting table) {
+        if (removed || remoteGrid == null || target == null) return false;
+        final ICraftingPatternDetails source = sourceOf(patternDetails);
+        final DualityInterface duality = target.getInterfaceDuality();
+        if (source == null || duality == null || !duality.pushPattern(source, table)) return false;
+        for (final IAEItemStack out : patternDetails.getCondensedOutputs()) {
+            owed.merge(out.copy().setStackSize(1), out.getStackSize(), Long::sum);
+        }
         saveChanges();
         wake();
         return true;
     }
 
+    /** Busy like the faced interface (blocking mode, a machine that has not taken everything yet). */
+    @Override
+    public boolean isBusy() {
+        if (target == null || remoteGrid == null) return true;
+        final DualityInterface duality = target.getInterfaceDuality();
+        return duality == null || duality.isBusy();
+    }
+
     /** Whether network A still waits for this item from us. */
     boolean owes(IAEItemStack item) {
         final IAEItemStack key = item.copy().setStackSize(1);
-        if (queued.containsKey(key) || toDeliver.containsKey(key)) return true;
-        for (final Request r : running) {
-            if (r.item.isSameType(key)) return true;
-        }
-        return false;
+        return owed.containsKey(key) || toDeliver.containsKey(key);
     }
 
     IGrid getOwnGrid() {
@@ -349,34 +248,56 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
         LIVE.add(this);
         refresh();
         final IGrid own = ownGrid();
-        if (remoteGrid != null && remoteGrid != linkedGrid) {
-            registerLinks(remoteGrid);
-            linkedGrid = remoteGrid;
+        if (own != null) {
+            matchNeeds(own);
+            if (remoteGrid != null) fetch(remoteGrid);
+            deliver(own);
         }
-        if (own != null) deliver(own);
-        final long now = worldTime();
-        if (own != null) matchNeeds(own, now);
-        if (remoteGrid != null) startJobs(own, remoteGrid, now);
-        else dropCalculation();
-        if (!toDeliver.isEmpty() || calculation != null) return TickRateModulation.URGENT;
-        if (!queued.isEmpty()) return TickRateModulation.FASTER;
-        return TickRateModulation.SLOWER;
+        if (!toDeliver.isEmpty()) return TickRateModulation.URGENT;
+        return owed.isEmpty() ? TickRateModulation.SLOWER : TickRateModulation.FASTER;
     }
 
-    private long worldTime() {
-        final TileEntity self = getHost() == null ? null : getHost().getTile();
-        return self == null || self.getWorldObj() == null ? 0 : self.getWorldObj().getTotalWorldTime();
-    }
-
-    private void registerLinks(IGrid remote) {
-        final ICraftingGrid crafting = remote.getCache(ICraftingGrid.class);
-        if (!(crafting instanceof CraftingGridCache)) return;
-        for (final Request r : running) {
-            if (r.link instanceof CraftingLink) ((CraftingGridCache) crafting).addLink((CraftingLink) r.link);
+    /**
+     * Owes no more than network A's CPUs still wait for: a cancelled job, or products that reached network A
+     * another way (a machine of network B returning them straight into network A), are not fetched.
+     */
+    private void matchNeeds(IGrid own) {
+        boolean changed = false;
+        for (final Iterator<Map.Entry<IAEItemStack, Long>> it = owed.entrySet().iterator(); it.hasNext();) {
+            final Map.Entry<IAEItemStack, Long> e = it.next();
+            final long waiting = RemoteCrafting.waitingAmount(own, e.getKey());
+            if (waiting < 0) continue;
+            final long need = Math.max(0, waiting - toDeliver.getOrDefault(e.getKey(), 0L));
+            if (need >= e.getValue()) continue;
+            changed = true;
+            if (need <= 0) it.remove();
+            else e.setValue(need);
         }
+        if (changed) saveChanges();
     }
 
-    /** Items from network B into network A's storage, where A's waiting CPU takes them first. */
+    /** What network B's machines made for us, out of network B's storage. */
+    private void fetch(IGrid remote) {
+        if (owed.isEmpty()) return;
+        final IStorageGrid storage = remote.getCache(IStorageGrid.class);
+        if (storage == null) return;
+        final IMEMonitor<IAEItemStack> items = storage.getItemInventory();
+        final BaseActionSource source = new MachineSource(target);
+        boolean changed = false;
+        for (final Iterator<Map.Entry<IAEItemStack, Long>> it = owed.entrySet().iterator(); it.hasNext();) {
+            final Map.Entry<IAEItemStack, Long> e = it.next();
+            final IAEItemStack got = items.extractItems(e.getKey().copy().setStackSize(e.getValue()),
+                    Actionable.MODULATE, source);
+            if (got == null || got.getStackSize() <= 0) continue;
+            changed = true;
+            toDeliver.merge(e.getKey(), got.getStackSize(), Long::sum);
+            if (got.getStackSize() >= e.getValue()) it.remove();
+            else e.setValue(e.getValue() - got.getStackSize());
+        }
+        if (changed) saveChanges();
+    }
+
+    /** Into network A's storage, where its waiting CPU takes them first. */
     private void deliver(IGrid own) {
         if (toDeliver.isEmpty()) return;
         final IStorageGrid storage = own.getCache(IStorageGrid.class);
@@ -394,350 +315,6 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
             else e.setValue(rest);
         }
         if (changed) saveChanges();
-    }
-
-    /**
-     * Keeps what the bus orders in network B in line with what network A's CPUs still wait for. Network A no longer
-     * waits for an item (its job was cancelled): stop crafting it in network B. It waits for less than the bus still
-     * owes (the item came into network A past the bus): order less, and if a job in network B already makes more,
-     * say so - usually network B's machines return their products into network A instead of network B.
-     */
-    private void matchNeeds(IGrid own, long now) {
-        final ICraftingGrid crafting = own.getCache(ICraftingGrid.class);
-        final java.util.Set<IAEItemStack> items = new java.util.HashSet<>(queued.keySet());
-        for (final Request r : running) items.add(r.item);
-        for (final IAEItemStack item : items) {
-            long need = RemoteCrafting.waitingAmount(own, item);
-            if (need < 0) need = crafting.isRequesting(item) ? Long.MAX_VALUE : 0;
-            final long owed = owed(item);
-            if (need >= owed) {
-                unneededSince.remove(item);
-                continue;
-            }
-            final Long since = unneededSince.get(item);
-            if (since == null) {
-                unneededSince.put(item, now);
-                continue;
-            }
-            if (now - since < CANCEL_GRACE_TICKS) continue;
-            unneededSince.remove(item);
-            if (need > 0) {
-                orderLess(item, owed - need);
-                continue;
-            }
-            final Long dropped = queued.remove(item);
-            if (calculation != null && calculation.item.isSameType(item)) dropCalculation();
-            long cancelled = 0;
-            for (final Iterator<Request> it = running.iterator(); it.hasNext();) {
-                final Request r = it.next();
-                if (!r.item.isSameType(item)) continue;
-                it.remove();
-                cancelled += r.amount - r.delivered;
-                r.link.cancel();
-            }
-            AEGraphMod.LOG.info("Remote crafting bus: network no longer needs {}, dropped {} queued, cancelled {} in "
-                    + "the other network", name(item), dropped == null ? 0 : dropped, cancelled);
-            saveChanges();
-        }
-    }
-
-    /** Queued + being crafted in network B + delivered but not yet in network A. */
-    private long owed(IAEItemStack item) {
-        long owed = queued.getOrDefault(item, 0L) + toDeliver.getOrDefault(item, 0L);
-        for (final Request r : running) {
-            if (r.item.isSameType(item)) owed += Math.max(0, r.amount - r.delivered);
-        }
-        return owed;
-    }
-
-    /** Network A got {@code extra} of the item past the bus: take it off the queue, warn about the rest. */
-    private void orderLess(IAEItemStack item, long extra) {
-        final long q = queued.getOrDefault(item, 0L);
-        final long cut = Math.min(q, extra);
-        if (cut > 0) {
-            if (q - cut > 0) queued.put(item, q - cut);
-            else queued.remove(item);
-            if (calculation != null && calculation.item.isSameType(item)) dropCalculation();
-            saveChanges();
-        }
-        if (extra > cut) problem("aegraph.remote.problem.elsewhere", name(item));
-        AEGraphMod.LOG.info("Remote crafting bus: {} x {} came into this network past the bus, ordering {} less",
-                extra, name(item), cut);
-    }
-
-    private void dropCalculation() {
-        if (calculation == null) return;
-        if (calculation.future != null) calculation.future.cancel(true);
-        calculation = null;
-    }
-
-    /** Whether this bus is calculating a request in network B (others wait for their turn there). */
-    private boolean hasTurn(IGrid remote, long now) {
-        return !removed && calculation != null && remoteGrid == remote && now - turnSince < TURN_TIMEOUT_TICKS;
-    }
-
-    /**
-     Hands queued amounts to network B, one request at a time: calculate there (only while network B has an idle CPU), move what network B lacks from network A's storage ({@link #supplyMissing}) and calculate again, then start the job on that CPU right away, so the moved items go into it.
-     */
-    private void startJobs(IGrid own, IGrid remote, long now) {
-        final ICraftingGrid crafting = remote.getCache(ICraftingGrid.class);
-        if (calculation == null) {
-            final IAEItemStack item = nextQueued(now);
-            if (item == null) return;
-            final PartRemoteBus holder = TURNS.get(remote);
-            if (holder != null && holder != this && holder.hasTurn(remote, now)) return;
-            if (freeCpu(crafting, 0) == null) {
-                problem("aegraph.remote.problem.waitCpu", queued.get(item) + " x " + name(item));
-                return;
-            }
-            calculation = new Calculation(item, queued.get(item), false);
-            turnSince = now;
-            TURNS.put(remote, this);
-        }
-        final Calculation calc = calculation;
-        if (calc.future == null) {
-            try {
-                calc.future = crafting.beginCraftingJob(getHost().getTile().getWorldObj(), remote, remoteSource,
-                        calc.item.copy().setStackSize(calc.amount), null);
-            } catch (Throwable t) {
-                AEGraphMod.LOG.warn("Remote crafting bus: could not start a crafting calculation for "
-                        + name(calc.item), t);
-            }
-            if (calc.future == null) retry(calc.item, now, "aegraph.remote.problem.failed", name(calc.item));
-            return;
-        }
-        if (!calc.future.isDone()) return;
-        calculation = null;
-        final IAEItemStack item = calc.item;
-        final long want = queued.getOrDefault(item, 0L);
-        if (want <= 0) return;
-        if (want != calc.amount) {
-            // The request changed meanwhile: calculate the new amount.
-            calculation = new Calculation(item, want, calc.supplied);
-            return;
-        }
-        ICraftingJob job = null;
-        try {
-            if (!calc.future.isCancelled()) job = calc.future.get();
-        } catch (Throwable t) {
-            AEGraphMod.LOG.warn("Remote crafting bus: crafting calculation failed for " + name(item), t);
-        }
-        if (job == null) {
-            retry(item, now, "aegraph.remote.problem.failed", name(item));
-            return;
-        }
-        if (job.isSimulation()) {
-            if (!calc.supplied && supplyMissing(own, remote, job, item, calc.amount)) {
-                // Calculate again with the items in network B; the turn stays with this request.
-                calculation = new Calculation(item, calc.amount, true);
-                return;
-            }
-            if (calc.supplied) problem("aegraph.remote.problem.missing", calc.amount + " x " + name(item));
-            retryAt.put(item, now + RETRY_TICKS);
-            return;
-        }
-        final ICraftingCPU cpu = freeCpu(crafting, job.getByteTotal());
-        final ICraftingLink link = cpu == null ? null : crafting.submitJob(job, requester, cpu, false, remoteSource);
-        if (link == null) {
-            retry(item, now, "aegraph.remote.problem.noCpu", calc.amount + " x " + name(item));
-            return;
-        }
-        running.add(new Request(link, item, calc.amount));
-        final long rest = want - calc.amount;
-        if (rest > 0) queued.put(item, rest);
-        else queued.remove(item);
-        retryAt.remove(item);
-        problemKey = null;
-        saveChanges();
-    }
-
-    /** The first queued item that is not waiting for a retry. */
-    private IAEItemStack nextQueued(long now) {
-        for (final Map.Entry<IAEItemStack, Long> e : queued.entrySet()) {
-            final Long retry = retryAt.get(e.getKey());
-            if (e.getValue() > 0 && (retry == null || now >= retry)) return e.getKey();
-        }
-        return null;
-    }
-
-    private void retry(IAEItemStack item, long now, String key, String arg) {
-        calculation = null;
-        problem(key, arg);
-        retryAt.put(item, now + RETRY_TICKS);
-    }
-
-    /**
-     * Network B's calculation came out short: what B lacks is moved from network A's storage into B's - all of it, or nothing when network A doesn't have it all either (then the problem lists what neither network has). False when nothing was moved. One batch per attempt, and the job starts right after it: network A hands over the raw materials, network B does the rest. Items network A's CPUs reserved are in those CPUs, not in storage, so they stay.
-     */
-    private boolean supplyMissing(IGrid own, IGrid remote, ICraftingJob job, IAEItemStack item, long amount) {
-        final String target = amount + " x " + name(item);
-        final IStorageGrid ownStorage = own == null ? null : (IStorageGrid) own.getCache(IStorageGrid.class);
-        final IStorageGrid remoteStorage = remote.getCache(IStorageGrid.class);
-        if (ownStorage == null || remoteStorage == null) {
-            problem("aegraph.remote.problem.missing", target);
-            return false;
-        }
-        final IMEMonitor<IAEItemStack> from = ownStorage.getItemInventory();
-        final IMEMonitor<IAEItemStack> to = remoteStorage.getItemInventory();
-        final List<IAEItemStack> lacking = lacking(job, item, to);
-        if (lacking.isEmpty()) {
-            problem("aegraph.remote.problem.missing", target);
-            return false;
-        }
-        final List<IAEItemStack> neither = new ArrayList<>();
-        for (final IAEItemStack s : lacking) {
-            final IAEItemStack have = from.extractItems(s.copy(), Actionable.SIMULATE, ownSource);
-            final long rest = s.getStackSize() - (have == null ? 0 : have.getStackSize());
-            if (rest > 0) neither.add(amount(s, rest));
-        }
-        if (!neither.isEmpty()) {
-            problem("aegraph.remote.problem.lacking", list(neither));
-            return false;
-        }
-        for (final IAEItemStack s : lacking) {
-            final IAEItemStack got = from.extractItems(s.copy(), Actionable.MODULATE, ownSource);
-            if (got == null || got.getStackSize() <= 0) continue;
-            final IAEItemStack left = to.injectItems(got, Actionable.MODULATE, remoteSource);
-            // Network B is full: back to network A.
-            if (left != null && left.getStackSize() > 0) {
-                toDeliver.merge(amount(left, 1), left.getStackSize(), Long::sum);
-            }
-        }
-        AEGraphMod.LOG.info("Remote crafting bus: moved {} from this network to the other one for {}", list(lacking),
-                target);
-        saveChanges();
-        return true;
-    }
-
-    /** What the (incomplete) plan of a job takes from network B's storage beyond what B has, without the target. */
-    private List<IAEItemStack> lacking(ICraftingJob job, IAEItemStack target, IMEMonitor<IAEItemStack> remoteItems) {
-        final IItemList<IAEItemStack> plan = AEApi.instance().storage().createItemList();
-        job.populatePlan(plan);
-        final List<IAEItemStack> lacking = new ArrayList<>();
-        for (final IAEItemStack s : plan) {
-            if (s.getStackSize() <= 0 || s.isSameType(target)) continue;
-            final IAEItemStack want = amount(s, s.getStackSize());
-            final IAEItemStack have = remoteItems.extractItems(want.copy(), Actionable.SIMULATE, remoteSource);
-            final long rest = want.getStackSize() - (have == null ? 0 : have.getStackSize());
-            if (rest > 0) lacking.add(want.setStackSize(rest));
-        }
-        return lacking;
-    }
-
-    /** A plain stack of the item (no craftable / requestable marks of a plan). */
-    private static IAEItemStack amount(IAEItemStack item, long amount) {
-        final IAEItemStack s = item.copy();
-        s.reset();
-        return s.setStackSize(amount);
-    }
-
-    /** Up to three stacks for messages. */
-    private static String list(List<IAEItemStack> stacks) {
-        final StringBuilder sb = new StringBuilder();
-        for (int k = 0; k < stacks.size() && k < 3; k++) {
-            if (k > 0) sb.append(", ");
-            sb.append(stacks.get(k).getStackSize()).append(" x ").append(name(stacks.get(k)));
-        }
-        if (stacks.size() > 3) sb.append(" (+").append(stacks.size() - 3).append(')');
-        return sb.toString();
-    }
-
-    /**
-     An idle CPU of network B (a co-processor CPU first when the job has a graph plan). Never a busy one: AE2 would merge the job into the running one and its results would not come to this bus.
-     */
-    private static ICraftingCPU freeCpu(ICraftingGrid crafting, long bytes) {
-        ICraftingCPU best = null;
-        boolean bestGraph = false;
-        for (final ICraftingCPU cpu : crafting.getCpus()) {
-            if (cpu.isBusy() || cpu.getAvailableStorage() < bytes) continue;
-            if (!(cpu instanceof CraftingCPUCluster) || !((CraftingCPUCluster) cpu).isActive()) continue;
-            final boolean graph = GraphCpus.isGraphCpu(cpu);
-            if (best == null || graph && !bestGraph
-                    || graph == bestGraph && cpu.getCoProcessors() > best.getCoProcessors()) {
-                best = cpu;
-                bestGraph = graph;
-            }
-        }
-        return best;
-    }
-
-    private void problem(String key, String arg) {
-        problemKey = key;
-        problemArg = arg;
-    }
-
-    private static String name(IAEItemStack item) {
-        try {
-            return item.getItemStack().getDisplayName();
-        } catch (Throwable t) {
-            return String.valueOf(item);
-        }
-    }
-
-    // --- network B: crafting requester ---------------------------------------------------------------------
-
-    /**
-     Stands for the bus in network B. Its node is the interface's: network B keeps a job's link alive only while the requester is a machine of network B.
-     */
-    private final class Requester implements ICraftingRequester {
-
-        @Override
-        public IGridNode getActionableNode() {
-            if (removed) return null;
-            final IInterfaceHost host = target != null ? target : findTarget();
-            return host == null ? null : host.getActionableNode();
-        }
-
-        @Override
-        public IGridNode getGridNode(ForgeDirection dir) {
-            return getActionableNode();
-        }
-
-        @Override
-        public AECableType getCableConnectionType(ForgeDirection dir) {
-            return AECableType.NONE;
-        }
-
-        @Override
-        public void securityBreak() {}
-
-        @Override
-        public ImmutableSet<ICraftingLink> getRequestedJobs() {
-            final ImmutableSet.Builder<ICraftingLink> links = ImmutableSet.builder();
-            for (final Request r : running) links.add(r.link);
-            return links.build();
-        }
-
-        @Override
-        public IAEItemStack injectCraftedItems(ICraftingLink link, IAEItemStack items, Actionable mode) {
-            if (items == null || removed) return items;
-            if (mode == Actionable.MODULATE) {
-                toDeliver.merge(items.copy().setStackSize(1), items.getStackSize(), Long::sum);
-                for (final Request r : running) {
-                    if (r.link == link) r.delivered += items.getStackSize();
-                }
-                saveChanges();
-                wake();
-            }
-            return null;
-        }
-
-        @Override
-        public void jobStateChange(ICraftingLink link) {
-            for (final Iterator<Request> it = running.iterator(); it.hasNext();) {
-                final Request r = it.next();
-                if (r.link != link) continue;
-                it.remove();
-                final long rest = r.amount - r.delivered;
-                if (link.isCanceled() && rest > 0) {
-                    // Cancelled inside network B (or it lost the CPU): ask again for what is still owed.
-                    queued.merge(r.item, rest, Long::sum);
-                    AEGraphMod.LOG.info("Remote crafting bus: job for {} x {} was cancelled in the other network, "
-                            + "requesting it again", rest, name(r.item));
-                }
-                saveChanges();
-            }
-        }
     }
 
     // --- GUI -----------------------------------------------------------------------------------------------
@@ -765,21 +342,16 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
         tag.setBoolean("exclusive", exclusive);
         tag.setString("state", stateKey);
         tag.setString("stateArg", stateArg);
-        if (problemKey != null) {
-            tag.setString("problem", problemKey);
-            tag.setString("problemArg", problemArg);
-        }
         final NBTTagList exports = new NBTTagList();
-        for (final RemotePattern p : exported) exports.appendTag(stackTag(p.output(), p.output().getStackSize()));
-        tag.setTag("exports", exports);
-        tag.setTag("queued", amounts(queued));
-        final NBTTagList jobs = new NBTTagList();
-        for (final Request r : running) {
-            final NBTTagCompound t = stackTag(r.item, r.amount);
-            t.setLong("delivered", r.delivered);
-            jobs.appendTag(t);
+        for (final RemotePattern p : exported) {
+            final NBTTagCompound t = stackTag(p.output(), p.output().getStackSize());
+            final NBTTagList in = new NBTTagList();
+            for (final IAEItemStack s : p.getCondensedInputs()) in.appendTag(stackTag(s, s.getStackSize()));
+            t.setTag("in", in);
+            exports.appendTag(t);
         }
-        tag.setTag("running", jobs);
+        tag.setTag("exports", exports);
+        tag.setTag("owed", amounts(owed));
         tag.setTag("deliver", amounts(toDeliver));
         return tag;
     }
@@ -798,45 +370,16 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
     public void readFromNBT(NBTTagCompound data) {
         super.readFromNBT(data);
         exclusive = data.getBoolean("exclusive");
-        readAmounts(data.getTagList("queued", 10), queued);
+        readAmounts(data.getTagList("owed", 10), owed);
         readAmounts(data.getTagList("deliver", 10), toDeliver);
-        running.clear();
-        final NBTTagList jobs = data.getTagList("running", 10);
-        for (int k = 0; k < jobs.tagCount(); k++) {
-            final NBTTagCompound t = jobs.getCompoundTagAt(k);
-            final IAEItemStack item = readStack(t);
-            if (item == null) continue;
-            try {
-                final ICraftingLink link = AEApi.instance().storage().loadCraftingLink(t.getCompoundTag("link"),
-                        requester);
-                final Request r = new Request(link, item, t.getLong("amount"));
-                r.delivered = t.getLong("delivered");
-                running.add(r);
-            } catch (Throwable e) {
-                // Lost link: ask network B again for what it still owed.
-                final long rest = t.getLong("amount") - t.getLong("delivered");
-                if (rest > 0) queued.merge(item, rest, Long::sum);
-            }
-        }
-        linkedGrid = null;
     }
 
     @Override
     public void writeToNBT(NBTTagCompound data) {
         super.writeToNBT(data);
         data.setBoolean("exclusive", exclusive);
-        data.setTag("queued", amounts(queued));
+        data.setTag("owed", amounts(owed));
         data.setTag("deliver", amounts(toDeliver));
-        final NBTTagList jobs = new NBTTagList();
-        for (final Request r : running) {
-            final NBTTagCompound t = stackTag(r.item, r.amount);
-            t.setLong("delivered", r.delivered);
-            final NBTTagCompound link = new NBTTagCompound();
-            r.link.writeToNBT(link);
-            t.setTag("link", link);
-            jobs.appendTag(t);
-        }
-        data.setTag("running", jobs);
     }
 
     private static NBTTagCompound stackTag(IAEItemStack item, long amount) {
@@ -883,11 +426,10 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
     public void removeFromWorld() {
         removed = true;
         LIVE.remove(this);
-        dropCalculation();
         super.removeFromWorld();
     }
 
-    /** Broken: what network B already delivered and network A did not take drops as items. */
+    /** Broken: what was taken from network B and network A did not accept yet drops as items. */
     @Override
     public void getDrops(List<ItemStack> drops, boolean wrenched) {
         int stacks = 0;

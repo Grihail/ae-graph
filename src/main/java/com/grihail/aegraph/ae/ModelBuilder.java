@@ -290,9 +290,9 @@ final class ModelBuilder {
     }
 
     /**
-     * A craft of another network (Remote Crafting Bus) is "nothing -> item" here: its inputs live in the other
-     * network and are not planned. Unless the bus is exclusive it costs {@code remoteCraftCost} times the value
-     * of what it makes, so this network's own routes come first and the other network covers what they can't.
+     * A pattern of another network's interface (Remote Crafting Bus) is planned like any processing pattern. Unless
+     * the bus is exclusive it costs {@code remoteCraftCost} times the value of what it makes, so this network's own
+     * routes come first and the other network covers what they can't.
      */
     private static double runCost(ICraftingPatternDetails pattern, long[][] io, double[] weight) {
         if (!(pattern instanceof RemotePattern) || ((RemotePattern) pattern).isExclusive()) {

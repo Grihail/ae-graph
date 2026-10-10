@@ -124,7 +124,6 @@ public final class Hooks {
 
     public static void onCpuUpdate(CraftingCPUCluster cpu, CraftingGridCache cache) {
         GraphCpus.applyAcceleration(cpu);
-        RemoteCrafting.pushRemoteTasks(cpu, cache);
         CpuStabilizer.onUpdate(cpu);
         if (reflectionBroken) return;
         try {
