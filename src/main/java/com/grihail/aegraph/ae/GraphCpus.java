@@ -19,7 +19,6 @@ import com.grihail.aegraph.AEGraphMod;
 import com.grihail.aegraph.block.TileGraphCoprocessor;
 import com.grihail.aegraph.network.AEGraphNetwork;
 
-import appeng.api.config.CraftingAllow;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.IGridHost;
 import appeng.api.networking.crafting.ICraftingCPU;
@@ -64,6 +63,38 @@ public final class GraphCpus {
         return list;
     }
 
+    // --- co-processor acceleration ------------------------------------------------------------------------------
+
+    /** Clusters that already got the acceleration of their co-processors (AE2 builds a new cluster on any change). */
+    private static final Map<CraftingCPUCluster, Boolean> ACCELERATED = new WeakHashMap<>();
+    private static Field acceleratorField;
+    private static boolean accelerationBroken;
+
+    /**
+     * Start of {@code CraftingCPUCluster.updateCraftingLogic}: adds {@code coprocessorAcceleration} per co-processor
+     * to the cluster's accelerator count, once per formed cluster. The tile itself does not count as an accelerator,
+     * so AE2 adds nothing for it on its own.
+     */
+    public static void applyAcceleration(CraftingCPUCluster cluster) {
+        if (accelerationBroken || AEGraphConfig.coprocessorAcceleration <= 0 || ACCELERATED.containsKey(cluster)) {
+            return;
+        }
+        ACCELERATED.put(cluster, Boolean.TRUE);
+        final int count = coprocessors(cluster).size();
+        if (count == 0) return;
+        try {
+            if (acceleratorField == null) {
+                acceleratorField = CraftingCPUCluster.class.getDeclaredField("accelerator");
+                acceleratorField.setAccessible(true);
+            }
+            acceleratorField.setInt(cluster,
+                    acceleratorField.getInt(cluster) + count * AEGraphConfig.coprocessorAcceleration);
+        } catch (Throwable t) {
+            accelerationBroken = true;
+            AEGraphMod.LOG.error("Co-processor acceleration disabled", t);
+        }
+    }
+
     /**
      * Called at the start of {@code CraftingGridCache.submitJob}: when AE2 would pick a CPU on its own, a graph
      * job goes to a free CPU with a co-processor. If none is free, AE2 picks a normal CPU, which then runs the
@@ -79,15 +110,7 @@ public final class GraphCpus {
         for (final ICraftingCPU cpu : cache.getCpus()) {
             if (!(cpu instanceof CraftingCPUCluster) || !isGraphCpu(cpu)) continue;
             final CraftingCPUCluster cluster = (CraftingCPUCluster) cpu;
-            if (!cluster.isActive()) continue;
-            final CraftingAllow allow = cluster.getCraftingAllowMode();
-            if (source != null && source.isPlayer() && allow == CraftingAllow.ONLY_NONPLAYER) continue;
-            if (source != null && !source.isPlayer() && allow == CraftingAllow.ONLY_PLAYER) continue;
-            final boolean free = !cluster.isBusy() && cluster.getAvailableStorage() >= bytes;
-            final boolean merge = cluster.isBusy() && cluster.getFinalOutput() != null
-                    && job.getOutput().isSameType(cluster.getFinalOutput())
-                    && cluster.getAvailableStorage() >= cluster.getUsedStorage() + bytes;
-            if (!free && !merge) continue;
+            if (!cluster.isActive() || cluster.isBusy() || cluster.getAvailableStorage() < bytes) continue;
             if (best == null || cluster.getCoProcessors() > best.getCoProcessors()) best = cluster;
         }
         if (best == null) tell(source, new ChatComponentTranslation("aegraph.chat.cpuBusy"));

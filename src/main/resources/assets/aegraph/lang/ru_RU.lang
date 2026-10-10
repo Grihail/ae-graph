@@ -36,6 +36,7 @@ aegraph.fallback.target=граф не может сделать цель
 aegraph.fallback.missing=графу не хватает %s, а AE2 хватает
 aegraph.chat.fallback=Графовый план не используется (%s). Выполняется стандартный план AE2.
 aegraph.chat.cpuBusy=Все CPU с графовым со-процессором заняты — задача уйдёт на обычный CPU со стандартным планом AE2.
+aegraph.chat.needsCoprocessor=Стандартный план AE2 не может это сделать, только графовый. Запустите задачу на CPU с графовым со-процессором.
 item.aegraph.remoteBus.name=Шина удалённого крафта
 item.aegraph.remoteBus.tooltip=Шина хранения для МЕ-интерфейса другой МЕ сети.\nКрафты этого интерфейса можно заказывать из этой сети,\nа считает и крафтит их вторая сеть — своими CPU и ресурсами.
 item.aegraph.remotePattern.name=Удалённый крафт: %s

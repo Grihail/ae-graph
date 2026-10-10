@@ -72,7 +72,6 @@ public final class CpuStabilizer {
     private static Field valueField;
     private static Field inventoryField;
     private static Field waitingForField;
-    private static Field waitingForMissingField;
     private static Field finalOutputField;
     private static Field isCompleteField;
     private static Field machineSrcField;
@@ -88,7 +87,6 @@ public final class CpuStabilizer {
         tasksField = field(c, "tasks");
         inventoryField = field(c, "inventory");
         waitingForField = field(c, "waitingFor");
-        waitingForMissingField = field(c, "waitingForMissing");
         finalOutputField = field(c, "finalOutput");
         isCompleteField = field(c, "isComplete");
         machineSrcField = field(c, "machineSrc");
@@ -176,8 +174,6 @@ public final class CpuStabilizer {
             if (type == Actionable.MODULATE) {
                 final long counted = Math.min(expected.getStackSize(), what.getStackSize());
                 expected.decStackSize(counted);
-                final IAEItemStack missing = list(waitingForMissingField, cpu).findPrecise(what);
-                if (missing != null) missing.decStackSize(Math.min(counted, missing.getStackSize()));
                 postStatusMethod.invoke(cpu, expected);
                 postChangeMethod.invoke(cpu, what.copy(), src);
                 markDirtyMethod.invoke(cpu);
@@ -399,7 +395,6 @@ public final class CpuStabilizer {
         final List<IAEItemStack> dropped = new ArrayList<>();
         for (final IAEItemStack s : waitingFor) dropped.add(s.copy());
         waitingFor.resetStatus();
-        list(waitingForMissingField, cpu).resetStatus();
         for (final IAEItemStack s : dropped) postStatusMethod.invoke(cpu, s.setStackSize(0));
         markDirtyMethod.invoke(cpu);
     }

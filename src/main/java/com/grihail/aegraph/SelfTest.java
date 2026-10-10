@@ -17,6 +17,7 @@ import net.minecraftforge.common.DimensionManager;
 import net.minecraftforge.common.util.ForgeDirection;
 
 import com.grihail.aegraph.ae.GraphCpus;
+import com.grihail.aegraph.ae.GridPatterns;
 import com.grihail.aegraph.ae.GraphCraftingJob;
 import com.grihail.aegraph.block.TileGraphCoprocessor;
 import com.grihail.aegraph.item.FastFeed;
@@ -73,6 +74,8 @@ public final class SelfTest {
         int every;
         /** The pattern substitutes: the machine accepts any damage value of the input item. */
         boolean substitute;
+        /** Crafting-table pattern (its output comes from the recipe); the chest still plays the machine. */
+        boolean crafting;
 
         Process(ItemStack[] in, ItemStack[] out) {
             this.in = in;
@@ -81,7 +84,9 @@ public final class SelfTest {
         }
     }
 
+    /** Patterns of network A's first interface (9 slots) and of its second one, each with its own machine. */
     private final List<Process> processes = new ArrayList<>();
+    private final List<Process> processes2 = new ArrayList<>();
 
     private int tick = 0;
     private int stage = 0;
@@ -125,13 +130,14 @@ public final class SelfTest {
         processes.add(shortchanging);
         processes.add(new Process(new ItemStack[] { new ItemStack(Items.stick, 2) },
                 new ItemStack[] { new ItemStack(Blocks.torch) }));
-        // substituting pattern written with oak planks, only birch planks are stored
+        // substituting crafting pattern written with oak planks, only birch planks are stored
         final Process button = new Process(new ItemStack[] { new ItemStack(Blocks.planks, 1, 0) },
                 new ItemStack[] { new ItemStack(Blocks.wooden_button) });
         button.substitute = true;
-        processes.add(button);
+        button.crafting = true;
+        processes2.add(button);
         // network A's own way to make bricks (the remote bus test compares it with network B's)
-        processes.add(new Process(new ItemStack[] { new ItemStack(Blocks.wool) },
+        processes2.add(new Process(new ItemStack[] { new ItemStack(Blocks.wool) },
                 new ItemStack[] { new ItemStack(Items.brick) }));
 
         // Network B, interface 1 (the one the Remote Crafting Bus faces): clay -> brick, 4 bricks -> brick block
@@ -157,7 +163,10 @@ public final class SelfTest {
         if (event.phase != TickEvent.Phase.END || stage < 0) return;
         tick++;
         try {
-            if (stage > 2) runMachine((IInventory) world.getTileEntity(x0 + 4, y0, z0), processes, false);
+            if (stage > 2) {
+                runMachine((IInventory) world.getTileEntity(x0 + 4, y0, z0), processes, false);
+                runMachine((IInventory) world.getTileEntity(x0 + 4, y0 + 1, z0), processes2, false);
+            }
             if (remoteBuilt) {
                 runMachine((IInventory) world.getTileEntity(x0, y0, z0 + 2), remoteProcesses, true);
                 runMachine((IInventory) world.getTileEntity(x0 + 3, y0, z0 + 5), remoteProcesses2, true);
@@ -217,6 +226,9 @@ public final class SelfTest {
                 place(2, AEApi.instance().definitions().blocks().drive());
                 place(3, AEApi.instance().definitions().blocks().iface());
                 world.setBlock(x0 + 4, y0, z0, Blocks.chest, 0, 3);
+                // second interface on top of the first one, with its own machine
+                place(3, 1, AEApi.instance().definitions().blocks().iface());
+                world.setBlock(x0 + 4, y0 + 1, z0, Blocks.chest, 0, 3);
                 log("network placed at " + x0 + "," + y0 + "," + z0);
                 next();
                 return;
@@ -227,12 +239,14 @@ public final class SelfTest {
                         AEApi.instance().definitions().items().cell64k().maybeStack(1).get());
                 iface = (TileInterface) world.getTileEntity(x0 + 3, y0, z0);
                 source = new MachineSource((IActionHost) iface);
-                // more than 9 patterns: one pattern capacity card
-                iface.getInventoryByName("upgrades").setInventorySlotContents(0,
-                        AEApi.instance().definitions().materials().cardPatternCapacity().maybeStack(1).get());
                 final IInventory patterns = iface.getInventoryByName("patterns");
                 for (int k = 0; k < processes.size(); k++) {
                     patterns.setInventorySlotContents(k, processingPattern(processes.get(k)));
+                }
+                final IInventory patterns2 = ((TileInterface) world.getTileEntity(x0 + 3, y0 + 1, z0))
+                        .getInventoryByName("patterns");
+                for (int k = 0; k < processes2.size(); k++) {
+                    patterns2.setInventorySlotContents(k, processingPattern(processes2.get(k)));
                 }
                 next();
                 return;
@@ -241,7 +255,7 @@ public final class SelfTest {
                 final IGrid grid = grid();
                 if (grid == null) return;
                 final ICraftingGrid crafting = grid.getCache(ICraftingGrid.class);
-                if (crafting.getCpus().size() < 2 || crafting.getCraftingPatterns().size() < 3) return;
+                if (crafting.getCpus().size() < 2 || GridPatterns.of(crafting).size() < 3) return;
                 int graphCpus = 0;
                 for (final ICraftingCPU cpu : crafting.getCpus()) {
                     if (GraphCpus.isGraphCpu(cpu)) graphCpus++;
@@ -254,7 +268,7 @@ public final class SelfTest {
                 inject(new ItemStack(Blocks.netherrack, 8));
                 inject(new ItemStack(Blocks.log, 2));
                 inject(new ItemStack(Blocks.planks, 3, 2));
-                log("network ready: " + crafting.getCpus().size() + " cpu, " + crafting.getCraftingPatterns().size()
+                log("network ready: " + crafting.getCpus().size() + " cpu, " + GridPatterns.of(crafting).size()
                         + " craftable items");
                 next();
                 return;
@@ -267,6 +281,14 @@ public final class SelfTest {
                 requestAny(new ItemStack(Items.flint), 9);
                 return;
             case 4:
+                if (pending.isDone() && pendingIsSimulation()) {
+                    // The original AE2's calculator sees no way to get the sand from gravel here (the gravel
+                    // pattern also makes flint, so it counts as recursive). Only the comparison is lost.
+                    log("AE2's own calculator can't plan 9 flint on this AE2 version, comparison skipped");
+                    AEGraphConfig.enabled = true;
+                    goTo(7);
+                    return;
+                }
                 awaitPlan("9 flint, stock AE2", false);
                 return;
             case 5:
@@ -373,6 +395,19 @@ public final class SelfTest {
                 request(new ItemStack(Items.flint), 2);
                 return;
             case 20:
+                if (pending.isDone() && pending instanceof GraphCraftingJob
+                        && ((GraphCraftingJob) pending).stockJob() != null
+                        && ((GraphCraftingJob) pending).stockJob().isSimulation()) {
+                    // This AE2's own plan lacks items (it doesn't see the sand from gravel): only the graph plan
+                    // works, so the plain CPU must refuse the job and stay free.
+                    job = (GraphCraftingJob) pending;
+                    final ICraftingGrid crafting = grid().getCache(ICraftingGrid.class);
+                    check(crafting.submitJob(job, null, forcedCpu, false, source) == null && !forcedCpu.isBusy(),
+                            "2 flint: the plain CPU refuses a job AE2's own plan can't make");
+                    forcedCpu = null;
+                    goTo(22);
+                    return;
+                }
                 awaitPlan("2 flint on the plain CPU", false);
                 return;
             case 21:
@@ -462,24 +497,24 @@ public final class SelfTest {
                 if (a == null || b == null) return;
                 final ICraftingGrid ca = a.getCache(ICraftingGrid.class);
                 final ICraftingGrid cb = b.getCache(ICraftingGrid.class);
-                if (cb.getCpus().isEmpty() || cb.getCraftingPatterns().size() < 3) return;
-                if (!ca.getCraftingPatterns().containsKey(ae(new ItemStack(Blocks.brick_block)))) return;
+                if (cb.getCpus().isEmpty() || GridPatterns.of(cb).size() < 3) return;
+                if (!GridPatterns.of(ca).containsKey(ae(new ItemStack(Blocks.brick_block)))) return;
                 log("remote bus: " + describeBus());
                 check(a != b, "network A and network B are separate grids");
-                final List<ICraftingPatternDetails> bricks = ca.getCraftingPatterns().get(ae(new ItemStack(Items.brick)));
+                final List<ICraftingPatternDetails> bricks = GridPatterns.of(ca).get(ae(new ItemStack(Items.brick)));
                 check(bricks != null && bricks.size() == 2 && remoteCount(bricks) == 1,
                         "network A makes bricks with its own pattern or through the bus");
-                final List<ICraftingPatternDetails> blocks = ca.getCraftingPatterns()
+                final List<ICraftingPatternDetails> blocks = GridPatterns.of(ca)
                         .get(ae(new ItemStack(Blocks.brick_block)));
                 check(blocks.size() == 1 && blocks.get(0) instanceof RemotePattern
                         && blocks.get(0).getCondensedInputs().length == 0,
                         "network A sees network B's brick block as one step without inputs (it never plans B's chain)");
-                check(!ca.getCraftingPatterns().containsKey(ae(new ItemStack(Items.clay_ball))),
+                check(!GridPatterns.of(ca).containsKey(ae(new ItemStack(Items.clay_ball))),
                         "crafts of network B's other interface are not offered to network A");
-                check(!cb.getCraftingPatterns().containsKey(ae(new ItemStack(Items.flint))),
+                check(!GridPatterns.of(cb).containsKey(ae(new ItemStack(Items.flint))),
                         "network B does not see network A's patterns");
-                final List<ICraftingPatternDetails> glass = ca.getCraftingPatterns().get(ae(new ItemStack(Blocks.glass)));
-                final List<ICraftingPatternDetails> bottles = ca.getCraftingPatterns()
+                final List<ICraftingPatternDetails> glass = GridPatterns.of(ca).get(ae(new ItemStack(Blocks.glass)));
+                final List<ICraftingPatternDetails> bottles = GridPatterns.of(ca)
                         .get(ae(new ItemStack(Items.glass_bottle)));
                 check(glass != null && remoteCount(glass) == 1 && bottles != null && remoteCount(bottles) == 1
                         && ((RemotePattern) bottles.get(0)).output().getStackSize() == 2,
@@ -556,8 +591,8 @@ public final class SelfTest {
                 return;
             case 48: {
                 if (!waited(5)) return;
-                final List<ICraftingPatternDetails> bricks = ((ICraftingGrid) grid().getCache(ICraftingGrid.class))
-                        .getCraftingPatterns().get(ae(new ItemStack(Items.brick)));
+                final List<ICraftingPatternDetails> bricks = GridPatterns
+                        .of((ICraftingGrid) grid().getCache(ICraftingGrid.class)).get(ae(new ItemStack(Items.brick)));
                 check(bricks.size() == 1 && bricks.get(0) instanceof RemotePattern,
                         "exclusive: network A's own brick pattern is hidden from its calculators");
                 // AE2's own calculator and a plain CPU must handle the remote step as well.
@@ -855,6 +890,14 @@ public final class SelfTest {
         next();
     }
 
+    private boolean pendingIsSimulation() {
+        try {
+            return pending.get().isSimulation();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private void awaitPlan(String name, boolean expectMissing) {
         if (waited(600)) throw new IllegalStateException("timeout: plan for " + name);
         if (!pending.isDone()) return;
@@ -935,7 +978,11 @@ public final class SelfTest {
     }
 
     private void place(int dx, ITileDefinition definition) {
-        world.setBlock(x0 + dx, y0, z0, definition.maybeBlock().get(), 0, 3);
+        place(dx, 0, definition);
+    }
+
+    private void place(int dx, int dy, ITileDefinition definition) {
+        world.setBlock(x0 + dx, y0 + dy, z0, definition.maybeBlock().get(), 0, 3);
     }
 
     private IGrid grid() {
@@ -972,6 +1019,8 @@ public final class SelfTest {
             stack.writeToNBT(tag);
             in.appendTag(tag);
         }
+        // A crafting pattern always has the 9 grid slots, like the Pattern Terminal writes it.
+        while (process.crafting && in.tagCount() < 9) in.appendTag(new NBTTagCompound());
         final NBTTagList out = new NBTTagList();
         for (final ItemStack stack : process.out) {
             final NBTTagCompound tag = new NBTTagCompound();
@@ -981,7 +1030,7 @@ public final class SelfTest {
         final NBTTagCompound data = new NBTTagCompound();
         data.setTag("in", in);
         data.setTag("out", out);
-        data.setBoolean("crafting", false);
+        data.setBoolean("crafting", process.crafting);
         data.setBoolean("substitute", process.substitute);
         final ItemStack pattern = AEApi.instance().definitions().items().encodedPattern().maybeStack(1).get();
         pattern.setTagCompound(data);

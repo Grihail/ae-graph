@@ -96,7 +96,7 @@ final class ModelBuilder {
         final ICraftingGrid craftingGrid = grid.getCache(ICraftingGrid.class);
         final IStorageGrid storageGrid = grid.getCache(IStorageGrid.class);
         storage = new MECraftingInventory(storageGrid.getItemInventory(), source, false, false, false);
-        final Map<IAEItemStack, ImmutableList<ICraftingPatternDetails>> byOutput = craftingGrid.getCraftingPatterns();
+        final Map<IAEItemStack, ImmutableList<ICraftingPatternDetails>> byOutput = GridPatterns.of(craftingGrid);
         craftables = AEApi.instance().storage().createItemList();
         for (final IAEItemStack key : byOutput.keySet()) craftables.add(key.copy().setStackSize(1));
 
@@ -255,7 +255,9 @@ final class ModelBuilder {
         if (inputs == null || outputs == null || outputs.length == 0) return null;
         final LinkedHashMap<Integer, Long> in = new LinkedHashMap<>();
         final LinkedHashMap<Integer, Long> out = new LinkedHashMap<>();
-        final boolean substitute = AEGraphConfig.substitutes && pattern.canSubstitute();
+        // Only crafting-table patterns: every AE2 CPU takes any accepted item for those when substitution is on.
+        // For processing patterns some AE2 versions take only the exact item.
+        final boolean substitute = AEGraphConfig.substitutes && pattern.canSubstitute() && pattern.isCraftable();
         for (final IAEItemStack stack : inputs) {
             if (stack == null || stack.getStackSize() <= 0) continue;
             int id = id(stack);

@@ -3,7 +3,6 @@ package com.grihail.aegraph.block;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 
-import com.grihail.aegraph.AEGraphConfig;
 import com.grihail.aegraph.AEGraphMod;
 
 import appeng.tile.TileEvent;
@@ -26,16 +25,12 @@ public class TileGraphCoprocessor extends TileCraftingTile {
     /**
      * The co-processor also works as a strong crafting accelerator. AE2 lets a CPU push only (accelerators + 1)
      * pattern runs per 3 ticks; graph plans often consist of many small runs (one byproduct each), so without
-     * acceleration the CPU feeds a fast machine one item every few ticks.
+     * acceleration the CPU feeds a fast machine one item every few ticks. AE2 itself counts every accelerator block
+     * as one, so the tile is not one: {@code GraphCpus.applyAcceleration} adds {@code coprocessorAcceleration}.
      */
     @Override
     public boolean isAccelerator() {
-        return AEGraphConfig.coprocessorAcceleration > 0;
-    }
-
-    @Override
-    public int acceleratorValue() {
-        return AEGraphConfig.coprocessorAcceleration;
+        return false;
     }
 
     public NBTTagCompound getLastPlan() {

@@ -64,14 +64,13 @@ public class BlockGraphCoprocessor extends BlockCraftingUnit {
         return (metadata & FLAG_FORMED) != 0 ? iconFit : iconUnformed;
     }
 
+    /** Called by AE2 after its own wrench and memory card handling. */
     @Override
-    public boolean onBlockActivated(World world, int x, int y, int z, EntityPlayer player, int side, float hitX,
+    public boolean onActivated(World world, int x, int y, int z, EntityPlayer player, int side, float hitX,
             float hitY, float hitZ) {
         final TileGraphCoprocessor te = getTileEntity(world, x, y, z);
         if (player.isSneaking()) {
-            if (te == null || player.getHeldItem() != null || !te.isFormed() || !te.isActive()) {
-                return super.onBlockActivated(world, x, y, z, player, side, hitX, hitY, hitZ); // wrench etc.
-            }
+            if (te == null || player.getHeldItem() != null || !te.isFormed() || !te.isActive()) return false;
             if (!world.isRemote) {
                 Platform.openGUI(player, te, ForgeDirection.getOrientation(side), GuiBridge.GUI_CRAFTING_CPU);
             }

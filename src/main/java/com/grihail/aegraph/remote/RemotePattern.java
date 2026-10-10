@@ -132,11 +132,6 @@ public final class RemotePattern implements ICraftingPatternDetails {
     }
 
     @Override
-    public boolean canBeSubstitute() {
-        return false;
-    }
-
-    @Override
     public ItemStack getOutput(InventoryCrafting craftingInv, World world) {
         return null;
     }

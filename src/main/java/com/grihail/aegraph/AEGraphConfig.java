@@ -83,8 +83,8 @@ public final class AEGraphConfig {
                         + "interfaces (world load, big builds) that is one full rebuild per interface. true: requests "
                         + "within one tick are merged into a single rebuild at the network's next tick.");
         substitutes = config.getBoolean("substitutes", SOLVER, true,
-                "Patterns with 'substitute' enabled may use equivalent items (ore dictionary, other damage values), "
-                        + "like AE2 does. Off: the graph uses only the exact items written in the pattern.");
+                "Crafting patterns with 'substitute' enabled may use equivalent items (ore dictionary, other damage "
+                        + "values), like AE2 does. Off: the graph uses only the exact items written in the pattern.");
 
         defaultItemCost = config.get(COSTS, "defaultItemCost", 1.0,
                 "Cost of taking one item from ME storage. The planner minimizes the total cost.").getDouble();

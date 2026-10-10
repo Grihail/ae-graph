@@ -26,6 +26,15 @@ repositories {
         url = 'https://nexus.gtnewhorizons.com/repository/public/'
     }
     exclusiveContent {
+        forRepository {
+            maven {
+                name = 'CurseMaven'
+                url = 'https://cursemaven.com'
+            }
+        }
+        filter { includeGroup 'curse.maven' }
+    }
+    exclusiveContent {
         forRepository { mavenCentral() }
         filter {
             includeModule 'org.scala-lang', 'scala-library'
@@ -43,10 +52,9 @@ minecraft {
 }
 
 dependencies {
-    // Та же сборка AE2, что стоит в модпаке (deobf-версия для компиляции).
-    compileOnly('com.github.GTNewHorizons:Applied-Energistics-2-Unofficial:rv3-beta-690-GTNH:dev') {
-        transitive = false
-    }
+    // Original AE2 rv3-beta-6 (CurseForge file 2296430). Only its API and classes are used, all of which the GTNH
+    // fork (rv3-beta-690-GTNH) kept unchanged, so one jar runs on both.
+    compileOnly(rfg.deobf('curse.maven:applied-energistics-2-223794:2296430'))
 
     testImplementation 'junit:junit:4.13.2'
 }

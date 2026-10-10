@@ -3,6 +3,8 @@ package com.grihail.aegraph.remote;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -26,22 +28,28 @@ public final class RemoteCrafting {
     // --- exclusive mode ------------------------------------------------------------------------------------
 
     /**
-     * End of {@code CraftingGridCache.setPatternsFromCraftingMethods}: for an item that an exclusive remote bus
-     * offers, only the exclusive remote patterns stay. Every calculator (AE2's and the graph planner) reads this
-     * map, so network A crafts such an item only through the other network.
+     * End of {@code CraftingGridCache.updatePatterns} ({@code craftable}: AE2's map by output item) and
+     * {@link com.grihail.aegraph.ae.GridPatterns#of}: for an item that an exclusive remote bus offers, only the
+     * exclusive remote patterns stay. Every calculator (AE2's and the graph planner) reads such a map, so network A
+     * crafts the item only through the other network.
      */
-    public static void filterExclusive(Map<IAEItemStack, ImmutableList<ICraftingPatternDetails>> craftable) {
-        if (craftable == null || craftable.isEmpty()) return;
-        for (final Map.Entry<IAEItemStack, ImmutableList<ICraftingPatternDetails>> e : craftable.entrySet()) {
-            final ImmutableList<ICraftingPatternDetails> all = e.getValue();
-            List<ICraftingPatternDetails> exclusive = null;
-            for (final ICraftingPatternDetails details : all) {
-                if (details instanceof RemotePattern && ((RemotePattern) details).isExclusive()) {
-                    if (exclusive == null) exclusive = new ArrayList<>(2);
-                    exclusive.add(details);
-                }
+    public static void filterExclusive(Map<IAEItemStack, ImmutableList<ICraftingPatternDetails>> craftable,
+            Collection<ICraftingPatternDetails> allPatterns) {
+        if (craftable == null || allPatterns == null) return;
+        // Taken from all patterns of the network: AE2 may keep only one pattern per item and priority in the map.
+        final Map<IAEItemStack, List<ICraftingPatternDetails>> exclusive = new HashMap<>();
+        for (final ICraftingPatternDetails details : allPatterns) {
+            if (!(details instanceof RemotePattern) || !((RemotePattern) details).isExclusive()) continue;
+            for (final IAEItemStack out : details.getOutputs()) {
+                if (out == null) continue;
+                final IAEItemStack key = out.copy();
+                key.reset();
+                key.setCraftable(true);
+                exclusive.computeIfAbsent(key, k -> new ArrayList<>(2)).add(details);
             }
-            if (exclusive != null && exclusive.size() < all.size()) e.setValue(ImmutableList.copyOf(exclusive));
+        }
+        for (final Map.Entry<IAEItemStack, List<ICraftingPatternDetails>> e : exclusive.entrySet()) {
+            craftable.put(e.getKey(), ImmutableList.copyOf(e.getValue()));
         }
     }
 

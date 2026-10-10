@@ -1,5 +1,7 @@
 package com.grihail.aegraph.ae;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -7,6 +9,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.ChatComponentTranslation;
 import net.minecraft.world.World;
@@ -18,35 +21,42 @@ import com.grihail.aegraph.core.Planner;
 import com.grihail.aegraph.core.Problem;
 import com.grihail.aegraph.core.Recipe;
 
+import appeng.api.AEApi;
 import appeng.api.config.Actionable;
-import appeng.api.config.CraftingMode;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.crafting.ICraftingCPU;
 import appeng.api.networking.crafting.ICraftingCallback;
+import appeng.api.networking.crafting.ICraftingGrid;
 import appeng.api.networking.crafting.ICraftingJob;
 import appeng.api.networking.security.BaseActionSource;
 import appeng.api.storage.data.IAEItemStack;
 import appeng.api.storage.data.IItemList;
 import appeng.crafting.CraftBranchFailure;
+import appeng.crafting.CraftingJob;
+import appeng.crafting.CraftingTreeNode;
 import appeng.crafting.MECraftingInventory;
-import appeng.crafting.v2.CraftingJobV2;
-import appeng.hooks.TickHandler;
 import appeng.me.cluster.implementations.CraftingCPUCluster;
+import cpw.mods.fml.common.eventhandler.SubscribeEvent;
+import cpw.mods.fml.common.gameevent.TickEvent;
 
 /**
- * Crafting job planned on the whole pattern graph. Driven by AE2's TickHandler on the server thread:
+ * Crafting job planned on the whole pattern graph. Driven by {@link #DRIVER} on the server thread:
  * <ol>
- * <li>BUILD - read patterns and storage into a {@link Problem}; start the optimizer in a background thread and
- * AE2's own calculator next to it.</li>
+ * <li>BUILD - read patterns and storage into a {@link Problem}; start the optimizer in a background thread. AE2's
+ * own calculation of the same request was started next to it by {@link Hooks#beginCraftingJob}.</li>
  * <li>RUNNING - wait for both.</li>
  * <li>DONE - the graph plan is shown in the confirmation screen. CPUs with a Graph Co-Processor run the graph
- * plan, other CPUs run AE2's plan. If the graph can't make the target (or lacks items AE2 can cover, e.g. via
- * ore-dictionary substitutes) AE2's plan is used everywhere.</li>
+ * plan, other CPUs run AE2's job ({@link Hooks#jobForCpu}). If the graph can't make the target (or lacks items AE2
+ * can cover, e.g. via ore-dictionary substitutes) AE2's job is used everywhere.</li>
  * </ol>
  * Execution reuses the stock crafting CPU: it receives the items to extract and run counts for every pattern
  * and pushes whatever pattern has its inputs ready, which naturally follows the branching/looping plan.
+ * <p>
+ * The class extends AE2's {@link CraftingJob} because that is the job type every AE2 CPU accepts; the inherited
+ * calculator is never run. CPUs start a job either through {@code getTree().setJob(...)} or through
+ * {@code startCrafting(...)}; both lead to {@link #startCrafting}.
  */
-public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
+public class GraphCraftingJob extends CraftingJob implements Future<ICraftingJob> {
 
     public static volatile String lastPlanSummary;
 
@@ -56,6 +66,53 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
         thread.setPriority(Thread.NORM_PRIORITY - 1);
         return thread;
     });
+
+    public static final Driver DRIVER = new Driver();
+
+    /** Steps the jobs being calculated, once per server tick. */
+    public static final class Driver {
+
+        private Driver() {}
+
+        @SubscribeEvent
+        public void onServerTick(TickEvent.ServerTickEvent event) {
+            if (event.phase != TickEvent.Phase.END) return;
+            final List<GraphCraftingJob> jobs;
+            synchronized (PENDING) {
+                if (PENDING.isEmpty()) return;
+                jobs = new ArrayList<>(PENDING);
+            }
+            for (final GraphCraftingJob job : jobs) {
+                boolean more;
+                try {
+                    more = job.step();
+                } catch (Throwable t) {
+                    AEGraphMod.LOG.error("Graph crafting job failed", t);
+                    job.cancel(false);
+                    more = false;
+                }
+                if (!more) {
+                    synchronized (PENDING) {
+                        PENDING.remove(job);
+                    }
+                }
+            }
+        }
+    }
+
+    private static final List<GraphCraftingJob> PENDING = new ArrayList<>();
+
+    /**
+     * What AE2's base class is built for: an item no pattern makes, so its own crafting tree stays empty and
+     * costs nothing. The real target is {@link #output}.
+     */
+    private static IAEItemStack placeholder() {
+        final ItemStack stack = new ItemStack(AEGraphMod.coprocessor);
+        final NBTTagCompound tag = new NBTTagCompound();
+        tag.setBoolean("aegraphPlaceholder", true);
+        stack.setTagCompound(tag);
+        return AEApi.instance().storage().createItemStack(stack);
+    }
 
     private enum Phase {
         BUILD,
@@ -68,17 +125,17 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
     private final IGrid grid;
     private final BaseActionSource source;
     private final IAEItemStack output;
-    private final CraftingMode mode;
     private final ICraftingCallback callback;
     private final long startedAt = System.currentTimeMillis();
+    private final CraftingTreeNode tree;
 
     private volatile Phase phase = Phase.BUILD;
     private ModelBuilder.Model model;
     private Future<Plan> solving;
     private Plan plan;
     /** AE2's own calculation: for CPUs without co-processor and as fallback. */
-    private CraftingJobV2 stock;
-    private boolean stockDone;
+    private Future<ICraftingJob> stockFuture;
+    private ICraftingJob stock;
     /** True when the graph plan is the one to show and run on graph CPUs. */
     private boolean graph;
     private long graphBytes = 1;
@@ -87,39 +144,47 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
     private String fallbackKey;
     private String fallbackArg = "";
 
-    public GraphCraftingJob(World world, IGrid grid, BaseActionSource source, IAEItemStack what, CraftingMode mode,
-            ICraftingCallback callback) {
+    public GraphCraftingJob(World world, IGrid grid, BaseActionSource source, IAEItemStack what,
+            ICraftingCallback callback, Future<ICraftingJob> stockFuture) {
+        super(world, grid, source, placeholder(), null);
         this.world = world;
         this.grid = grid;
         this.source = source;
         this.output = what.copy();
-        this.mode = mode;
         this.callback = callback;
+        this.stockFuture = stockFuture;
+        this.tree = new StartNode(grid.getCache(ICraftingGrid.class), this);
     }
 
-    /** Whether graph CPUs get the graph plan (false: AE2's plan is used on every CPU). */
+    /** Whether graph CPUs get the graph plan (false: AE2's job is used on every CPU). */
     public boolean usesGraph() {
         return phase == Phase.DONE && graph;
     }
 
+    /** AE2's own job for the same request, once calculated; null if it is not available. */
+    public ICraftingJob stockJob() {
+        return stock;
+    }
+
+    /** A graph CPU is about to run AE2's job: its co-processor shows the graph plan it could not use. */
+    void recordFallback(CraftingCPUCluster cpu) {
+        if (snapshot != null && !cpu.isBusy() && GraphCpus.isGraphCpu(cpu)) GraphCpus.recordStarted(cpu, snapshot);
+    }
+
     // --- calculation ------------------------------------------------------------------------------------------
 
-    @Override
     public Future<ICraftingJob> schedule() {
-        TickHandler.INSTANCE.registerCraftingSimulation(world, this);
+        synchronized (PENDING) {
+            PENDING.add(this);
+        }
         return this;
     }
 
-    @Override
-    public boolean simulateFor(int milli) {
-        if (phase == Phase.BUILD) {
-            build();
-        }
+    /** One server tick of calculation; false when the job needs no more ticks. */
+    private boolean step() {
+        if (phase == Phase.BUILD) build();
         if (phase != Phase.RUNNING) return false;
-        if (stock != null && !stockDone) {
-            stockDone = !stock.simulateFor(milli);
-        }
-        if ((stock == null || stockDone) && (solving == null || solving.isDone())) {
+        if ((stockFuture == null || stockFuture.isDone()) && (solving == null || solving.isDone())) {
             decide();
             return false;
         }
@@ -127,12 +192,6 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
     }
 
     private void build() {
-        try {
-            stock = new CraftingJobV2(world, grid, source, output.copy(), mode, null);
-        } catch (Throwable t) {
-            AEGraphMod.LOG.error("AE2 calculator could not be started for " + output, t);
-            stock = null;
-        }
         try {
             model = ModelBuilder.build(grid, source, output, world);
             if (model.truncated) {
@@ -156,7 +215,19 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
         phase = Phase.RUNNING;
     }
 
+    private void takeStock() {
+        if (stockFuture == null) return;
+        try {
+            stock = stockFuture.isCancelled() ? null : stockFuture.get();
+        } catch (Throwable t) {
+            AEGraphMod.LOG.error("AE2 calculator failed for " + output, t);
+            stock = null;
+        }
+        stockFuture = null;
+    }
+
     private void decide() {
+        takeStock();
         if (solving != null) {
             try {
                 plan = solving.get();
@@ -265,13 +336,13 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
     @Override
     public boolean isSimulation() {
         if (!graph) return stock == null || stock.isSimulation();
-        return plan.hasMissing() && mode != CraftingMode.IGNORE_MISSING;
+        return plan.hasMissing();
     }
 
     @Override
     public long getByteTotal() {
         if (!graph) return stock == null ? 1 : stock.getByteTotal();
-        // The same job may end up on a normal CPU running AE2's plan; reserve enough for either.
+        // The same job may end up on a normal CPU running AE2's job; reserve enough for either.
         return stock == null ? graphBytes : Math.max(graphBytes, stock.getByteTotal());
     }
 
@@ -293,7 +364,7 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
             final Recipe recipe = problem.recipes.get(p);
             for (int q = 0; q < recipe.outItems.length; q++) {
                 list.addRequestable(model.keys.get(recipe.outItems[q]).copy().setStackSize(0)
-                        .setCountRequestable(runs * recipe.outAmounts[q]).setCountRequestableCrafts(runs));
+                        .setCountRequestable(runs * recipe.outAmounts[q]));
             }
         }
     }
@@ -304,36 +375,30 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
     }
 
     @Override
-    public boolean supportsCPUCluster(ICraftingCPU cluster) {
-        if (!(cluster instanceof CraftingCPUCluster)) return false;
-        if (graph && GraphCpus.isGraphCpu(cluster)) return true;
-        return stock != null;
+    public CraftingTreeNode getTree() {
+        return tree;
     }
 
     @Override
-    public CraftingMode getCraftingMode() {
-        return mode;
+    public boolean simulateFor(int milli) {
+        return !isDone();
     }
 
     @Override
-    public MECraftingInventory getStorageAtBeginning() {
-        if (!graph && stock != null) return stock.getStorageAtBeginning();
-        return model != null && model.storage != null ? model.storage : new MECraftingInventory();
+    public void run() {
+        // AE2's calculator of the base class is never used.
     }
 
-    @Override
-    public void startCrafting(MECraftingInventory storage, ICraftingCPU rawCluster, BaseActionSource src) {
-        if (phase != Phase.DONE) {
-            throw new IllegalStateException("Trying to start an unfinished graph crafting job for " + output);
-        }
-        if (!graph || !GraphCpus.isGraphCpu(rawCluster)) {
-            stock.startCrafting(storage, rawCluster, src);
-            if (!graph && snapshot != null && rawCluster instanceof CraftingCPUCluster
-                    && GraphCpus.isGraphCpu(rawCluster)) {
-                // The co-processor shows the graph plan it could not use, with the reason.
-                GraphCpus.recordStarted((CraftingCPUCluster) rawCluster, snapshot);
-            }
-            return;
+    /**
+     * Puts the graph plan into a CPU with a co-processor ({@link Hooks#jobForCpu} sends other CPUs AE2's job). Any
+     * other CPU refuses the job: AE2's own plan for it lacks items. AE2's CPUs catch the {@link CraftBranchFailure}
+     * and stay free.
+     */
+    public void startCrafting(MECraftingInventory storage, ICraftingCPU rawCluster, BaseActionSource src)
+            throws CraftBranchFailure {
+        if (phase != Phase.DONE || !graph || !GraphCpus.isGraphCpu(rawCluster)) {
+            GraphCpus.tell(src, new ChatComponentTranslation("aegraph.chat.needsCoprocessor"));
+            throw new CraftBranchFailure(output, output.getStackSize());
         }
         final CraftingCPUCluster cpu = (CraftingCPUCluster) rawCluster;
         final Problem problem = model.problem;
@@ -345,17 +410,10 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
                 final IAEItemStack extracted = storage.extractItems(key.copy().setStackSize(take), Actionable.MODULATE,
                         src);
                 final long got = extracted == null ? 0 : extracted.getStackSize();
-                if (got < take) {
-                    if (!cpu.isMissingMode()) throw new CraftBranchFailure(key, take - got);
-                    cpu.addEmitable(key.copy().setStackSize(take - got));
-                }
-                if (got > 0) cpu.addStorage(extracted.copy());
+                if (got < take) throw new CraftBranchFailure(key, take - got);
+                cpu.addStorage(extracted.copy());
             }
-            final long missing = plan.missing[i];
-            if (missing > 0) {
-                if (!cpu.isMissingMode()) throw new CraftBranchFailure(key, missing);
-                cpu.addEmitable(key.copy().setStackSize(missing));
-            }
+            if (plan.missing[i] > 0) throw new CraftBranchFailure(key, plan.missing[i]);
         }
         for (int p = 0; p < plan.runs.length; p++) {
             // Substitution steps (null) need no task: substituting patterns pick their items themselves.
@@ -364,13 +422,31 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
         if (snapshot != null) GraphCpus.recordStarted(cpu, snapshot);
     }
 
+    /** The tree a CPU hands its storage to; it has no children and puts the graph plan in instead. */
+    private static final class StartNode extends CraftingTreeNode {
+
+        private final GraphCraftingJob job;
+
+        StartNode(ICraftingGrid crafting, GraphCraftingJob job) {
+            super(crafting, job, placeholder(), null, -1, 0);
+            this.job = job;
+        }
+
+        @Override
+        public void setJob(MECraftingInventory storage, CraftingCPUCluster cpu, BaseActionSource src)
+                throws CraftBranchFailure {
+            job.startCrafting(storage, cpu, src);
+        }
+    }
+
     // --- Future -----------------------------------------------------------------------------------------------
 
     @Override
     public boolean cancel(boolean mayInterruptIfRunning) {
         if (phase == Phase.DONE || phase == Phase.CANCELLED) return false;
         phase = Phase.CANCELLED;
-        if (stock != null) stock.cancel(mayInterruptIfRunning);
+        if (stockFuture != null) stockFuture.cancel(mayInterruptIfRunning);
+        if (solving != null) solving.cancel(mayInterruptIfRunning);
         return true;
     }
 
@@ -387,15 +463,10 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
     @Override
     public ICraftingJob get() throws InterruptedException, ExecutionException {
         while (!isDone()) {
-            if (phase == Phase.RUNNING && solving != null) {
-                try {
-                    solving.get();
-                } catch (ExecutionException ignored) {
-                    // reported in decide()
-                }
-            }
-            simulateFor(Integer.MAX_VALUE);
+            waitForParts(Long.MAX_VALUE);
+            step();
         }
+        if (phase == Phase.CANCELLED) throw new InterruptedException();
         return this;
     }
 
@@ -406,16 +477,24 @@ public class GraphCraftingJob implements ICraftingJob, Future<ICraftingJob> {
         while (!isDone()) {
             final long left = deadline - System.nanoTime();
             if (left <= 0) throw new TimeoutException();
-            if (phase == Phase.RUNNING && solving != null) {
-                try {
-                    solving.get(left, TimeUnit.NANOSECONDS);
-                } catch (ExecutionException ignored) {
-                    // reported in decide()
-                }
-            }
-            simulateFor((int) Math.max(1, Math.min(Integer.MAX_VALUE, TimeUnit.NANOSECONDS.toMillis(left))));
+            waitForParts(left);
+            step();
         }
         if (phase == Phase.CANCELLED) throw new InterruptedException();
         return this;
+    }
+
+    /** Blocks until the optimizer and AE2's calculation are done (or the time is up). */
+    private void waitForParts(long nanos) throws InterruptedException {
+        if (phase != Phase.RUNNING) return;
+        final long deadline = System.nanoTime() + nanos;
+        for (final Future<?> part : new Future<?>[] { solving, stockFuture }) {
+            if (part == null) continue;
+            try {
+                part.get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+            } catch (ExecutionException | TimeoutException | java.util.concurrent.CancellationException ignored) {
+                // reported in decide(), or the caller's timeout
+            }
+        }
     }
 }

@@ -2,22 +2,32 @@ package com.grihail.aegraph.ae;
 
 import java.util.List;
 
+import net.minecraft.block.Block;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
+import net.minecraft.tileentity.TileEntity;
+import net.minecraft.world.World;
+import net.minecraftforge.common.util.ForgeDirection;
 
+import com.grihail.aegraph.AEGraphMod;
 import com.grihail.aegraph.core.Plan;
 import com.grihail.aegraph.core.Problem;
 import com.grihail.aegraph.core.Recipe;
+import com.grihail.aegraph.remote.PartRemoteBus;
 
 import appeng.api.AEApi;
+import appeng.api.implementations.IUpgradeableHost;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.crafting.ICraftingGrid;
+import appeng.api.networking.crafting.ICraftingJob;
 import appeng.api.networking.crafting.ICraftingMedium;
 import appeng.api.networking.crafting.ICraftingPatternDetails;
 import appeng.api.storage.data.IAEItemStack;
 import appeng.api.storage.data.IItemList;
-import appeng.crafting.v2.CraftingJobV2;
+import appeng.helpers.DualityInterface;
+import appeng.helpers.IInterfaceHost;
 import appeng.me.cache.CraftingGridCache;
 
 /**
@@ -28,7 +38,7 @@ final class PlanSnapshot {
 
     private PlanSnapshot() {}
 
-    static NBTTagCompound build(IGrid grid, ModelBuilder.Model model, Plan plan, CraftingJobV2 stock, long created) {
+    static NBTTagCompound build(IGrid grid, ModelBuilder.Model model, Plan plan, ICraftingJob stock, long created) {
         final Problem problem = model.problem;
         final int n = problem.itemCount;
         final long[] produced = new long[n];
@@ -105,7 +115,7 @@ final class PlanSnapshot {
         root.setLong("takeFluid", takeFluid);
         root.setBoolean("missing", plan.hasMissing());
         root.setLong("created", created);
-        if (stock != null && stock.isDone() && !stock.isCancelled()) {
+        if (stock != null) {
             final IItemList<IAEItemStack> list = AEApi.instance().storage().createItemList();
             stock.populatePlan(list);
             long stockItems = 0;
@@ -132,16 +142,39 @@ final class PlanSnapshot {
         return list;
     }
 
+    /** The machine an ME Interface with this pattern pushes into, as an item (null if there is none). */
     private static ItemStack crafterIcon(CraftingGridCache cache, ICraftingPatternDetails pattern) {
         if (cache == null) return null;
         try {
             final List<ICraftingMedium> mediums = cache.getMediums(pattern);
             for (final ICraftingMedium medium : mediums) {
-                final ItemStack icon = medium.getCrafterIcon();
+                if (medium instanceof PartRemoteBus) return new ItemStack(AEGraphMod.remoteBus);
+                if (!(medium instanceof DualityInterface)) continue;
+                final IUpgradeableHost host = ((DualityInterface) medium).getHost();
+                if (!(host instanceof IInterfaceHost)) continue;
+                final ItemStack icon = machineNextTo((IInterfaceHost) host);
                 if (icon != null) return icon;
             }
         } catch (Throwable ignored) {
             // icon is cosmetic
+        }
+        return null;
+    }
+
+    private static ItemStack machineNextTo(IInterfaceHost host) {
+        final TileEntity tile = host.getTileEntity();
+        if (tile == null || tile.getWorldObj() == null) return null;
+        final World world = tile.getWorldObj();
+        for (final ForgeDirection side : host.getTargets()) {
+            final int x = tile.xCoord + side.offsetX;
+            final int y = tile.yCoord + side.offsetY;
+            final int z = tile.zCoord + side.offsetZ;
+            final TileEntity target = world.getTileEntity(x, y, z);
+            if (target == null || target instanceof IInterfaceHost) continue;
+            final Block block = world.getBlock(x, y, z);
+            final Item item = Item.getItemFromBlock(block);
+            if (item == null) continue;
+            return new ItemStack(item, 1, block.getDamageValue(world, x, y, z));
         }
         return null;
     }

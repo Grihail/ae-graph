@@ -27,7 +27,6 @@ import com.grihail.aegraph.network.AEGraphNetwork;
 
 import appeng.api.AEApi;
 import appeng.api.config.Actionable;
-import appeng.api.config.CraftingAllow;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.IGridNode;
 import appeng.api.networking.crafting.ICraftingCPU;
@@ -36,6 +35,7 @@ import appeng.api.networking.crafting.ICraftingJob;
 import appeng.api.networking.crafting.ICraftingLink;
 import appeng.api.networking.crafting.ICraftingPatternDetails;
 import appeng.api.networking.crafting.ICraftingProvider;
+import appeng.api.networking.crafting.ICraftingMedium;
 import appeng.api.networking.crafting.ICraftingProviderHelper;
 import appeng.api.networking.crafting.ICraftingRequester;
 import appeng.api.networking.events.MENetworkCraftingPatternChange;
@@ -213,8 +213,18 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
      * pattern takes its per-run amount from that pattern, otherwise from the first pattern that makes it.
      */
     private void collectExports(DualityInterface duality, List<RemotePattern> out) {
-        final List<ICraftingPatternDetails> patterns = duality == null ? null : duality.craftingList;
-        if (patterns == null) return;
+        if (duality == null) return;
+        final List<ICraftingPatternDetails> patterns = new ArrayList<>();
+        duality.provideCrafting(new ICraftingProviderHelper() {
+
+            @Override
+            public void addCraftingOption(ICraftingMedium medium, ICraftingPatternDetails details) {
+                patterns.add(details);
+            }
+
+            @Override
+            public void setEmitable(IAEItemStack item) {}
+        });
         final TileEntity self = getHost().getTile();
         final int dim = self.getWorldObj().provider.dimensionId;
         final Map<IAEItemStack, IAEItemStack> items = new LinkedHashMap<>();
@@ -272,11 +282,6 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
     @Override
     public boolean isBusy() {
         return false;
-    }
-
-    @Override
-    public ItemStack getCrafterIcon() {
-        return getItemStack().copy();
     }
 
     /**
@@ -481,11 +486,7 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
         boolean bestGraph = false;
         for (final ICraftingCPU cpu : crafting.getCpus()) {
             if (cpu.isBusy() || cpu.getAvailableStorage() < job.getByteTotal()) continue;
-            if (cpu instanceof CraftingCPUCluster) {
-                final CraftingCPUCluster cluster = (CraftingCPUCluster) cpu;
-                if (!cluster.isActive() || cluster.getCraftingAllowMode() == CraftingAllow.ONLY_PLAYER) continue;
-            }
-            if (!job.supportsCPUCluster(cpu)) continue;
+            if (!(cpu instanceof CraftingCPUCluster) || !((CraftingCPUCluster) cpu).isActive()) continue;
             final boolean graph = GraphCpus.isGraphCpu(cpu);
             if (best == null || graph && !bestGraph
                     || graph == bestGraph && cpu.getCoProcessors() > best.getCoProcessors()) {

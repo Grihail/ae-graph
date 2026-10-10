@@ -6,6 +6,7 @@ import net.minecraft.nbt.NBTTagCompound;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import com.grihail.aegraph.ae.GraphCraftingJob;
 import com.grihail.aegraph.asm.AEGraphTransformer;
 import com.grihail.aegraph.block.BlockGraphCoprocessor;
 import com.grihail.aegraph.block.TileGraphCoprocessor;
@@ -74,6 +75,7 @@ public class AEGraphMod {
     @Mod.EventHandler
     public void init(FMLInitializationEvent event) {
         proxy.init();
+        FMLCommonHandler.instance().bus().register(GraphCraftingJob.DRIVER);
         FastFeed.registerSupport();
         final IDefinitions ae = AEApi.instance().definitions();
         final ItemStack logic = ae.materials().logicProcessor().maybeStack(1).orNull();
@@ -81,16 +83,16 @@ public class AEGraphMod {
         final ItemStack eng = ae.materials().engProcessor().maybeStack(1).orNull();
         final ItemStack pearl = ae.materials().fluixPearl().maybeStack(1).orNull();
 
-        // Graph Co-Processor: it also accelerates its CPU like a 64x Crafting Co-Processing Unit
-        // (coprocessorAcceleration), so it is built around one.
+        // Graph Co-Processor: it also accelerates its CPU (coprocessorAcceleration), so it is built around a
+        // Crafting Co-Processing Unit.
         addShaped("Graph Co-Processor", new ItemStack(coprocessor), new String[] { "ECE", "LXL", "ECE" }, 'E', eng,
-                'C', calc, 'L', logic, 'X', ae.blocks().craftingAccelerator64x().maybeStack(1).orNull());
+                'C', calc, 'L', logic, 'X', ae.blocks().craftingAccelerator().maybeStack(1).orNull());
 
         // Fast Feed Card: removes the interface's multi-second stall between patterns, so it is above the
-        // Super Speed Card.
+        // Acceleration Card.
         addShaped("Fast Feed Card", new ItemStack(fastFeedCard), new String[] { "EPE", "ASA", "EPE" }, 'E', eng,
                 'P', pearl, 'A', ae.materials().advCard().maybeStack(1).orNull(), 'S',
-                ae.materials().cardSuperSpeed().maybeStack(1).orNull());
+                ae.materials().cardSpeed().maybeStack(1).orNull());
 
         // Remote Crafting Bus: a link to the whole crafting setup of another network.
         addShaped("Remote Crafting Bus", new ItemStack(remoteBus), new String[] { "EPE", "SIS", "EPE" }, 'E', eng,
@@ -127,11 +129,13 @@ public class AEGraphMod {
         if (!AEGraphTransformer.patchedCpuInject) {
             LOG.error("CraftingCPUCluster.injectItems was not patched, CPUs keep byproducts until the job ends");
         }
-        if (AEGraphTransformer.patchedJobFactory && AEGraphTransformer.patchedCpu) {
+        if (AEGraphTransformer.patchedJobFactory && AEGraphTransformer.patchedCpu && AEGraphTransformer.patchedCpuSubmit) {
             LOG.info("AE2 crafting calculator replaced by the graph planner.");
         } else {
-            LOG.error("AE2 classes were not patched (job factory: {}, cpu: {}). The graph planner is inactive.",
-                    AEGraphTransformer.patchedJobFactory, AEGraphTransformer.patchedCpu);
+            LOG.error("AE2 classes were not patched (job factory: {}, cpu: {}, cpu jobs: {}). The graph planner is "
+                    + "inactive.", AEGraphTransformer.patchedJobFactory, AEGraphTransformer.patchedCpu,
+                    AEGraphTransformer.patchedCpuSubmit);
+            AEGraphConfig.enabled = false;
         }
     }
 

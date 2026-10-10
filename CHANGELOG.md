@@ -5,11 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Works with the original Applied Energistics 2 rv3-beta-6: the mod is now built against it.
+
 ### Changed
 
 - Recipes are much more expensive, in line with what the items do:
-  - Graph Co-Processor: built around a 64x Crafting Co-Processing Unit (it accelerates its CPU by +64 by default), plus 4 Engineering, 2 Calculation and 2 Logic Processors.
-  - Fast Feed Card: Super Speed Card + 2 Advanced Cards + 4 Engineering Processors + 2 Fluix Pearls.
+  - Graph Co-Processor: built around a Crafting Co-Processing Unit (it accelerates its CPU by +64 by default), plus 4 Engineering, 2 Calculation and 2 Logic Processors.
+  - Fast Feed Card: Acceleration Card + 2 Advanced Cards + 4 Engineering Processors + 2 Fluix Pearls.
   - Remote Crafting Bus: 2 Storage Buses + ME Interface + 4 Engineering Processors + 2 Fluix Pearls.
 
 ## [1.0.0]

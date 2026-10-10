@@ -36,6 +36,7 @@ aegraph.fallback.target=the graph cannot make the target
 aegraph.fallback.missing=the graph lacks %s, AE2 does not
 aegraph.chat.fallback=Graph plan not used (%s). Running AE2's own plan.
 aegraph.chat.cpuBusy=All CPUs with a Graph Co-Processor are busy - the job goes to a normal CPU with AE2's own plan.
+aegraph.chat.needsCoprocessor=AE2's own plan can't make this, only the graph plan can. Start it on a CPU with a Graph Co-Processor.
 item.aegraph.remoteBus.name=Remote Crafting Bus
 item.aegraph.remoteBus.tooltip=Storage bus for an ME Interface of another ME network.\nThe interface's crafts can be ordered from this network;\nthe other network calculates and crafts them with its own CPUs and items.
 item.aegraph.remotePattern.name=Remote craft: %s

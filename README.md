@@ -2,14 +2,14 @@
 
 **English** | [Русский](README.ru.md)
 
-Addon for Applied Energistics 2 **rv3-beta-690-GTNH** (Minecraft 1.7.10). Other AE2 versions are not supported: the mod is a coremod and patches AE2 classes.
+Addon for Applied Energistics 2 **rv3-beta-6** (Minecraft 1.7.10). The mod is a coremod that hooks into AE2 classes.
 
 A crafting CPU with a Graph Co-Processor plans the whole job at once using every pattern in the network. It picks the cheapest combination of recipes, feeds byproducts of one step into other steps and uses recycling loops when they save resources. Stock AE2 picks one recipe per item and ignores byproducts.
 
 ## Requirements
 
 - Minecraft 1.7.10, Forge 10.13.4.1614
-- Applied Energistics 2 rv3-beta-690-GTNH
+- Applied Energistics 2 rv3-beta-6
 
 Install on both client and server.
 
@@ -27,7 +27,7 @@ Right-click opens the graph of the current or last plan: raw materials on the le
 E C E    E - Engineering Processor
 L X L    C - Calculation Processor
 E C E    L - Logic Processor
-         X - 64x Crafting Co-Processing Unit
+         X - Crafting Co-Processing Unit
 ```
 
 ### Fast Feed Card
@@ -38,7 +38,7 @@ Upgrade for the ME Interface (block or part). Normally, when a machine doesn't a
 E P E    E - Engineering Processor
 A S A    P - Fluix Pearl
 E P E    A - Advanced Card
-         S - Super Speed Card
+         S - Acceleration Card
 ```
 
 ### Remote Crafting Bus
@@ -78,7 +78,7 @@ If the graph can't build a plan, AE2's own plan is used and the chat says why.
 | `fallbackToAE2WhenMissing` | true | Use AE2's plan when the graph lacks items and AE2 doesn't |
 | `returnUnneededItems` | true | Send items no step needs to ME right away |
 | `stallSeconds` | 60 | Seconds without progress before stall recovery, 0 to disable |
-| `substitutes` | true | Handle patterns with substitution enabled |
+| `substitutes` | true | Crafting patterns with substitution enabled may use equivalent items |
 | `fluidCostPerMb` | 0.001 | Cost of 1 mB of fluid |
 | `storedIntermediateFactor` | 0.9 | Cost multiplier for crafted items already in ME |
 | `surplusPenalty` | 0.01 | Penalty for leftover byproducts |
