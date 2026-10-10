@@ -47,6 +47,8 @@ Lets one ME network order crafts from another without merging them. Put the bus 
 
 If network B lacks items for an order, the bus moves exactly the missing items from network A's storage to network B, once per order. Network A never sees network B's patterns, storage or crafting chain. It hands over raw materials and gets the result back.
 
+Network B's machines must return their products into network B (its interface or an import bus of network B), not into network A. Otherwise network B's CPU never sees them and the bus GUI warns about it.
+
 The **Priority** button in the bus GUI:
 
 - **ON**: these items are crafted only through the bus. Network A's own patterns for them are ignored.

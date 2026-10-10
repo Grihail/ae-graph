@@ -60,5 +60,7 @@ aegraph.remote.state.sameGrid=Интерфейс в этой же МЕ сети 
 aegraph.remote.state.remoteOffline=Интерфейс второй сети без питания или канала
 aegraph.remote.problem.missing=Второй сети не хватает ресурсов на %s. Повтор через 5 с.
 aegraph.remote.problem.lacking=Нет ни в одной из сетей: %s. Повтор через 5 с.
+aegraph.remote.problem.waitCpu=Ждёт свободный CPU во второй сети: %s.
+aegraph.remote.problem.elsewhere=%s пришёл в эту сеть мимо шины. Машины второй сети должны возвращать результат во вторую сеть, иначе её CPU ждёт его вечно.
 aegraph.remote.problem.noCpu=Во второй сети нет свободного CPU для %s. Повтор через 5 с.
 aegraph.remote.problem.failed=Не удалось рассчитать крафт %s во второй сети. Повтор через 5 с.

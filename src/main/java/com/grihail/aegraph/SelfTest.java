@@ -139,6 +139,12 @@ public final class SelfTest {
         // network A's own way to make bricks (the remote bus test compares it with network B's)
         processes2.add(new Process(new ItemStack[] { new ItemStack(Blocks.wool) },
                 new ItemStack[] { new ItemStack(Items.brick) }));
+        // network A's pattern with a remote ingredient: 2 bricks -> flower pot
+        processes2.add(new Process(new ItemStack[] { new ItemStack(Items.brick, 2) },
+                new ItemStack[] { new ItemStack(Items.flower_pot) }));
+        // ... and with two remote ingredients made from the same raw material: 4 bricks + brick block -> furnace
+        processes2.add(new Process(new ItemStack[] { new ItemStack(Items.brick, 4), new ItemStack(Blocks.brick_block) },
+                new ItemStack[] { new ItemStack(Blocks.furnace) }));
 
         // Network B, interface 1 (the one the Remote Crafting Bus faces): clay -> brick, 4 bricks -> brick block
         remoteProcesses.add(new Process(new ItemStack[] { new ItemStack(Items.clay_ball) },
@@ -689,11 +695,105 @@ public final class SelfTest {
                         && state.getTagList("deliver", 10).tagCount() == 0, "the bus has nothing left");
                 check(!anyCpuBusy() && !anyCpuBusyB(), "both CPUs free");
                 extract(new ItemStack(Items.brick), stored(new ItemStack(Items.brick)));
+                next();
+                return;
+            }
+            // 13c. The remote item is an ingredient, not the result: 2 flower pots in network A need 4 bricks from network B, which lacks the clay network A has. Graph planner first, then AE2's calculator.
+            case 84:
+                inject(new ItemStack(Blocks.clay, 1));
+                request(new ItemStack(Items.flower_pot), 2);
+                return;
+            case 85:
+                awaitPlan("2 flower pots (bricks from network B, graph)", false);
+                return;
+            case 86:
+                if (awaitCrafted(new ItemStack(Items.flower_pot), 2, "2 flower pots (graph)", true)) next();
+                return;
+            case 87:
+                if (!waited(40)) return;
+                checkPots("graph");
+                AEGraphConfig.enabled = false;
+                inject(new ItemStack(Blocks.clay, 1));
+                requestAny(new ItemStack(Items.flower_pot), 2);
+                return;
+            case 88:
+                awaitPlan("2 flower pots (bricks from network B, AE2 calculator)", false);
+                return;
+            case 89:
+                if (awaitCrafted(new ItemStack(Items.flower_pot), 2, "2 flower pots (AE2 calculator)", true)) next();
+                return;
+            case 90:
+                if (!waited(40)) return;
+                AEGraphConfig.enabled = true;
+                checkPots("AE2 calculator");
+                next();
+                return;
+            // 13d. Two remote ingredients from the same raw material, network B has one CPU: the bus calculates, supplies and starts them one after another, each takes exactly its share of network A's clay.
+            case 91:
+                // the brick block of step 11 is still in network A's storage
+                extract(new ItemStack(Blocks.brick_block), stored(new ItemStack(Blocks.brick_block)));
+                inject(new ItemStack(Blocks.clay, 2));
+                request(new ItemStack(Blocks.furnace), 1);
+                return;
+            case 92:
+                awaitPlan("1 furnace (bricks and a brick block from network B)", false);
+                return;
+            case 93:
+                if (awaitCrafted(new ItemStack(Blocks.furnace), 1, "1 furnace (two remote ingredients)", true)) next();
+                return;
+            case 94: {
+                if (!waited(40)) return;
+                final NBTTagCompound state = bus().describe();
+                log("remote bus: " + state);
+                check(stored(new ItemStack(Blocks.furnace)) == 1 && stored(new ItemStack(Blocks.clay)) == 0
+                        && stored(new ItemStack(Items.brick)) == 0 && stored(new ItemStack(Blocks.brick_block)) == 0,
+                        "two remote ingredients: network A's 2 clay blocks became bricks and a brick block");
+                check(storedB(new ItemStack(Blocks.clay)) == 0 && storedB(new ItemStack(Items.clay_ball)) == 0
+                        && storedB(new ItemStack(Items.brick)) == 0, "two remote ingredients: network B used exactly "
+                                + "what it got");
+                check(state.getTagList("queued", 10).tagCount() == 0 && state.getTagList("running", 10).tagCount() == 0
+                        && !anyCpuBusy() && !anyCpuBusyB(), "two remote ingredients: nothing left, CPUs free");
+                extract(new ItemStack(Blocks.furnace), 1);
+                next();
+                return;
+            }
+            // 13e. Network B's machine puts its products into network A: network A's CPU takes them, the bus warns and cancels network B's job, which would wait forever otherwise.
+            case 95:
+                leakB = true;
+                elsewhereSeen = false;
+                remoteProcesses.get(0).every = 60;
+                injectB(new ItemStack(Items.clay_ball, 4));
+                request(new ItemStack(Items.brick), 4);
+                return;
+            case 96:
+                awaitPlan("4 bricks (network B's machine leaks into network A)", false);
+                return;
+            case 97:
+                if ("aegraph.remote.problem.elsewhere".equals(bus().describe().getString("problem"))) {
+                    elsewhereSeen = true;
+                }
+                if (awaitCrafted(new ItemStack(Items.brick), 4, "4 bricks (leaking machine)", true)) next();
+                return;
+            case 98: {
+                if ("aegraph.remote.problem.elsewhere".equals(bus().describe().getString("problem"))) {
+                    elsewhereSeen = true;
+                }
+                if (waited(600)) throw new IllegalStateException("network B's job was not cancelled: " + describeBus());
+                if (anyCpuBusyB()) return;
+                leakB = false;
+                remoteProcesses.get(0).every = 0;
+                final NBTTagCompound state = bus().describe();
+                log("remote bus: " + state);
+                check(elsewhereSeen, "the bus warned that the bricks came past it");
+                check(stored(new ItemStack(Items.brick)) == 4 && storedB(new ItemStack(Items.clay_ball)) == 0,
+                        "leaking machine: network A got its 4 bricks");
+                check(state.getTagList("queued", 10).tagCount() == 0 && state.getTagList("running", 10).tagCount() == 0
+                        && !anyCpuBusy(), "leaking machine: network B's job cancelled, nothing left");
+                extract(new ItemStack(Items.brick), 4);
                 goTo(60);
                 return;
             }
-            // 14. Reload in the middle of a remote job (slow machine in network B): phase 1 stops the server here,
-            // phase 2 (-Daegraph.selftest.resume=true, same world) checks that the job finishes after the restart.
+            // 14. Reload in the middle of a remote job (slow machine in network B): phase 1 stops the server here, phase 2 (-Daegraph.selftest.resume=true, same world) checks that the job finishes after the restart.
             case 60:
                 injectB(new ItemStack(Blocks.clay, 2));
                 remoteProcesses.get(0).every = 20;
@@ -782,6 +882,24 @@ public final class SelfTest {
     }
 
     private MachineSource sourceB;
+    /** Network B's machines put their products into network A (a wrongly piped network B). */
+    private boolean leakB;
+    private boolean elsewhereSeen;
+
+    /** After 2 flower pots made from network B's bricks: everything used up, nothing left anywhere. */
+    private void checkPots(String how) {
+        final NBTTagCompound state = bus().describe();
+        log("remote bus: " + state);
+        check(stored(new ItemStack(Items.flower_pot)) == 2 && stored(new ItemStack(Items.brick)) == 0
+                && stored(new ItemStack(Blocks.clay)) == 0,
+                how + ": network A's clay went to network B, its bricks became 2 flower pots in network A");
+        check(storedB(new ItemStack(Blocks.clay)) == 0 && storedB(new ItemStack(Items.clay_ball)) == 0
+                && storedB(new ItemStack(Items.brick)) == 0, how + ": network B used exactly what it got");
+        check(state.getTagList("queued", 10).tagCount() == 0 && state.getTagList("running", 10).tagCount() == 0
+                && state.getTagList("deliver", 10).tagCount() == 0, how + ": the bus has nothing left");
+        check(!anyCpuBusy() && !anyCpuBusyB(), how + ": both CPUs free");
+        extract(new ItemStack(Items.flower_pot), stored(new ItemStack(Items.flower_pot)));
+    }
 
     private PartRemoteBus bus() {
         final TileEntity te = world.getTileEntity(x0 + 1, y0, z0 + 1);
@@ -868,7 +986,7 @@ public final class SelfTest {
                 if (!has(chest, process.in, process.substitute)) continue;
                 for (final ItemStack in : process.in) take(chest, in, process.substitute);
                 for (final ItemStack out : process.real) {
-                    if (networkB) injectB(out.copy());
+                    if (networkB && !leakB) injectB(out.copy());
                     else inject(out.copy());
                 }
                 machineLog.append(" t").append(tick - stageStart).append(networkB ? ":B" : ":p").append(p);

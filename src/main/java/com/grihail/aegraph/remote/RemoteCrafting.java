@@ -12,6 +12,8 @@ import com.google.common.collect.ImmutableList;
 import com.grihail.aegraph.AEGraphMod;
 
 import appeng.api.networking.IGrid;
+import appeng.api.networking.crafting.ICraftingCPU;
+import appeng.api.networking.crafting.ICraftingGrid;
 import appeng.api.networking.crafting.ICraftingMedium;
 import appeng.api.networking.crafting.ICraftingPatternDetails;
 import appeng.api.networking.security.BaseActionSource;
@@ -147,6 +149,24 @@ public final class RemoteCrafting {
             AEGraphMod.LOG.warn("Could not check remote crafting waits", t);
         }
         return false;
+    }
+
+    /** How many of the item the CPUs of a network still wait for; -1 if AE2's internals can't be read. */
+    public static long waitingAmount(IGrid grid, IAEItemStack item) {
+        if (broken) return -1;
+        try {
+            if (!ready) init();
+            long total = 0;
+            for (final ICraftingCPU cpu : ((ICraftingGrid) grid.getCache(ICraftingGrid.class)).getCpus()) {
+                if (!(cpu instanceof CraftingCPUCluster)) continue;
+                final IAEItemStack s = waitingFor((CraftingCPUCluster) cpu).findPrecise(item);
+                if (s != null && s.getStackSize() > 0) total += s.getStackSize();
+            }
+            return total;
+        } catch (Throwable t) {
+            AEGraphMod.LOG.warn("Could not read what the crafting CPUs wait for", t);
+            return -1;
+        }
     }
 
     @SuppressWarnings("unchecked")

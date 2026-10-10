@@ -60,5 +60,7 @@ aegraph.remote.state.sameGrid=The interface is in this same ME network - it need
 aegraph.remote.state.remoteOffline=The other network's interface has no power or channel
 aegraph.remote.problem.missing=The other network lacks items for %s. Retrying in 5 s.
 aegraph.remote.problem.lacking=Neither network has: %s. Retrying in 5 s.
+aegraph.remote.problem.waitCpu=Waiting for a free CPU in the other network: %s.
+aegraph.remote.problem.elsewhere=%s came into this network past the bus. The other network's machines must return their products into the other network, or its CPU waits for them forever.
 aegraph.remote.problem.noCpu=The other network has no free CPU for %s. Retrying in 5 s.
 aegraph.remote.problem.failed=Could not calculate %s in the other network. Retrying in 5 s.
