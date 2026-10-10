@@ -567,11 +567,7 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
     }
 
     /**
-     * Network B's calculation came out short: what B lacks is moved from network A's storage into B's - all of it,
-     * or nothing when network A doesn't have it all either (then the problem lists what neither network has). False
-     * when nothing was moved. One batch per attempt, and the job starts right after it: network A hands over the raw
-     * materials, network B does the rest. Items network A's CPUs reserved are in those CPUs, not in storage, so they
-     * stay.
+     * Network B's calculation came out short: what B lacks is moved from network A's storage into B's - all of it, or nothing when network A doesn't have it all either (then the problem lists what neither network has). False when nothing was moved. One batch per attempt, and the job starts right after it: network A hands over the raw materials, network B does the rest. Items network A's CPUs reserved are in those CPUs, not in storage, so they stay.
      */
     private boolean supplyMissing(IGrid own, IGrid remote, ICraftingJob job, IAEItemStack item, long amount) {
         final String target = amount + " x " + name(item);
@@ -647,8 +643,7 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
     }
 
     /**
-     * An idle CPU of network B (a co-processor CPU first when the job has a graph plan). Never a busy one: AE2 would
-     * merge the job into the running one and its results would not come to this bus.
+     An idle CPU of network B (a co-processor CPU first when the job has a graph plan). Never a busy one: AE2 would merge the job into the running one and its results would not come to this bus.
      */
     private static ICraftingCPU freeCpu(ICraftingGrid crafting, long bytes) {
         ICraftingCPU best = null;
@@ -682,8 +677,7 @@ public class PartRemoteBus extends PartBasicState implements ICraftingProvider, 
     // --- network B: crafting requester ---------------------------------------------------------------------
 
     /**
-     * Stands for the bus in network B. Its node is the interface's: network B keeps a job's link alive only while
-     * the requester is a machine of network B.
+     Stands for the bus in network B. Its node is the interface's: network B keeps a job's link alive only while the requester is a machine of network B.
      */
     private final class Requester implements ICraftingRequester {
 
