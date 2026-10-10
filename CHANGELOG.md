@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.1.0]
+
 ### Added
 
 - Works with the original Applied Energistics 2 rv3-beta-6: the mod is now built against it.
