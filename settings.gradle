@@ -1,7 +1,8 @@
 pluginManagement {
     repositories {
         maven {
-            name = 'GTNH Maven'
+            // Build plugin com.gtnewhorizons.retrofuturagradle (not published anywhere else).
+            name = 'RetroFuturaGradle'
             url = 'https://nexus.gtnewhorizons.com/repository/public/'
         }
         gradlePluginPortal()

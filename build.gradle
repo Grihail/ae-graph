@@ -21,10 +21,6 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 repositories {
-    maven {
-        name = 'GTNH Maven'
-        url = 'https://nexus.gtnewhorizons.com/repository/public/'
-    }
     exclusiveContent {
         forRepository {
             maven {
@@ -52,8 +48,7 @@ minecraft {
 }
 
 dependencies {
-    // Original AE2 rv3-beta-6 (CurseForge file 2296430). Only its API and classes are used, all of which the GTNH
-    // fork (rv3-beta-690-GTNH) kept unchanged, so one jar runs on both.
+    // Applied Energistics 2 rv3-beta-6 (CurseForge file 2296430).
     compileOnly(rfg.deobf('curse.maven:applied-energistics-2-223794:2296430'))
 
     testImplementation 'junit:junit:4.13.2'
